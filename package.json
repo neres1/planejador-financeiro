@@ -1,0 +1,12 @@
+{
+  "name": "planejador-financeiro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Organizador financeiro pessoal (PWA) com lançamentos recorrentes e dados salvos no GitHub.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "icons": "node tools/make-icons.mjs",
+    "start": "npx --yes http-server -c-1 -p 8080 ."
+  }
+}
