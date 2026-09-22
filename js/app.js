@@ -35,6 +35,7 @@ const ICONS = {
   check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>', 'stroke-width="3"'),
   left: svg('<path d="m15 18-6-6 6-6"/>'),
   right: svg('<path d="m9 18 6-6-6-6"/>'),
+  backspace: svg('<path d="M21 5H9l-6 7 6 7h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1Z"/><path d="m17 9-6 6M11 9l6 6"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
   cloud: svg('<path d="M17.5 19H7a5 5 0 1 1 1.3-9.83A6 6 0 0 1 19.4 11.2 4 4 0 0 1 17.5 19Z"/>'),
   cloudCheck: svg('<path d="M17.5 19H7a5 5 0 1 1 1.3-9.83A6 6 0 0 1 19.4 11.2 4 4 0 0 1 17.5 19Z"/><path d="m9.5 13.5 2 2 3.5-3.5"/>'),
@@ -667,13 +668,24 @@ async function deleteFlow(entry, occ) {
 // ---------------------------------------------------------------------------
 // Formulário de lançamento (com recorrência estilo agenda)
 
-function categoryOptions(type, selected) {
+function categoryGrid(type, selected) {
   const cats = store.categories();
   const groups = type === 'despesa' ? ['fixo', 'variavel'] : [type];
-  return groups.map((g) => `<optgroup label="${GROUPS[g].label}">${cats.filter((c) => c.group === g)
-    .map((c) => `<option value="${esc(c.id)}" ${c.id === selected ? 'selected' : ''}>${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</optgroup>`).join('');
+  return groups.map((g) => `
+    ${groups.length > 1 ? `<div class="lbl">${GROUPS[g].label}</div>` : ''}
+    <div class="cat-grid">${cats.filter((c) => c.group === g).map((c) => `
+      <button type="button" class="cat-tile ${c.id === selected ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}">
+        <span class="cat-emoji">${esc(c.emoji)}</span><span class="cat-name">${esc(c.name)}</span></button>`).join('')}
+    </div>`).join('');
 }
 
+const chip = (attr, value, label, on, cls = '') => `<button type="button" class="chip-opt ${cls} ${on ? 'on' : ''}" data-${attr}="${value}">${label}</button>`;
+
+const FREQS = [['none', 'Não repete'], ['monthly', 'Todo mês'], ['weekly', 'Toda semana'], ['daily', 'Todo dia'], ['yearly', 'Todo ano']];
+const STEPS = ['Valor', 'Categoria', 'Quando'];
+
+// Formulário em 3 passos (valor → categoria → quando), com teclado numérico,
+// grade de categorias e chips. Ao editar, dá para pular direto para qualquer passo.
 function openEntryForm({ entry = null, occ = null, date = null, type: startType = 'despesa' } = {}) {
   const t = todayISO();
   const v = occ
@@ -685,98 +697,120 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
   const rec = JSON.parse(JSON.stringify((entry && entry.recurrence) || { freq: 'none' }));
   if (!rec.end) rec.end = { type: 'never' };
   if (entry && rec.end.type === 'count') rec.end.count = formCount(entry);
-  const startDay = parseISO(entry ? entry.date : v.date).d;
-  const mday = rec.byMonthDay != null ? Number(rec.byMonthDay) : startDay;
-  const wdays = rec.byWeekday && rec.byWeekday.length ? rec.byWeekday : [weekday(v.date)];
   const seriesMode = entry && isRecurring(entry) && !occ; // editando a série inteira (aba Recorrentes)
   const title = !entry ? 'Novo lançamento' : seriesMode ? 'Editar série' : 'Editar lançamento';
 
   let type = v.type;
   let flow = (entry && entry.flow) || 'aporte';
   let cents = v.amount;
+  let catId = v.categoryId || '';
+  let freq = rec.freq;
+  let mday = rec.byMonthDay != null ? Number(rec.byMonthDay) : parseISO(entry ? entry.date : v.date).d;
+  let interval = Math.max(1, parseInt(rec.interval, 10) || 1);
+  let endType = rec.end.type;
+  const wdays0 = rec.byWeekday && rec.byWeekday.length ? rec.byWeekday : [weekday(v.date)];
+  let step = 1;
   let touchedFreq = !!entry, touchedPaid = !!entry, touchedMday = !!entry;
+
+  const dateLabel = () => (occ && occ.recurring ? 'Data desta ocorrência' : freq === 'none' ? 'Data' : 'Começa em');
 
   openSheet(`
     <div class="sheet-head"><button class="link" data-close>Cancelar</button><h2>${title}</h2><button class="link strong" data-f="save">Salvar</button></div>
+    <div class="wiz-steps">${STEPS.map((s, i) => `<button type="button" class="wiz-step" data-goto="${i + 1}"><span class="bar"></span>${i + 1}. ${s}</button>`).join('')}</div>
     <div class="sheet-body">
-      <form class="entry-form" data-kind="${type}" data-freq="${rec.freq}" data-end="${rec.end.type}" onsubmit="return false">
-        <div class="seg three type-seg">
-          ${['despesa', 'receita', 'investimento'].map((k) => `<button type="button" data-type="${k}" class="t-${k} ${type === k ? 'on' : ''}">${TYPE_LABEL[k]}</button>`).join('')}
-        </div>
-        <div class="seg flow-seg inv-only">
-          <button type="button" data-flow="aporte" class="${flow === 'aporte' ? 'on' : ''}">↗ Aporte</button>
-          <button type="button" data-flow="resgate" class="${flow === 'resgate' ? 'on' : ''}">↙ Resgate</button>
-        </div>
-        <label class="amount ${type}"><span>R$</span><input id="f-amount" inputmode="numeric" pattern="[0-9]*" value="${cents ? digitsDisplay(cents) : ''}" placeholder="0,00" autocomplete="off"></label>
-        <div class="form-list">
-          <label class="field"><span>Descrição</span><input id="f-desc" value="${esc(v.description)}" placeholder="Ex.: Aluguel, Mercado…" autocomplete="off" enterkeyhint="done"></label>
-          <label class="field"><span>Categoria</span><select id="f-cat">${categoryOptions(type, v.categoryId)}</select></label>
-          <label class="field"><span id="f-date-lbl">${occ && occ.recurring ? 'Data desta ocorrência' : isRecurring({ recurrence: rec }) ? 'Começa em' : 'Data'}</span><input id="f-date" type="date" value="${v.date}" required></label>
-          ${seriesMode ? '' : `<label class="field switch-field"><span id="f-paid-lbl">${PAID_LABEL[type]}${occ && occ.recurring ? ' (esta ocorrência)' : ''}</span><input id="f-paid" type="checkbox" class="switch" ${v.paid ? 'checked' : ''}></label>`}
-        </div>
+      <form class="entry-form wiz" data-kind="${type}" data-freq="${freq}" data-end="${endType}" data-step="1" onsubmit="return false">
 
-        <div class="section-title">Repetição</div>
-        <div class="form-list">
-          <label class="field"><span>Repetir</span>
-            <select id="f-freq">
-              <option value="none" ${rec.freq === 'none' ? 'selected' : ''}>Não repete</option>
-              <option value="monthly" ${rec.freq === 'monthly' ? 'selected' : ''}>Todo mês</option>
-              <option value="weekly" ${rec.freq === 'weekly' ? 'selected' : ''}>Toda semana</option>
-              <option value="daily" ${rec.freq === 'daily' ? 'selected' : ''}>Todo dia</option>
-              <option value="yearly" ${rec.freq === 'yearly' ? 'selected' : ''}>Todo ano</option>
-            </select></label>
-          <label class="field rec-only monthly-only"><span>Dia da cobrança</span>
-            <select id="f-mday">${Array.from({ length: 31 }, (_, i) => `<option value="${i + 1}" ${mday === i + 1 ? 'selected' : ''}>Dia ${i + 1}</option>`).join('')}
-              <option value="-1" ${mday === -1 ? 'selected' : ''}>Último dia do mês</option></select></label>
-          <div class="field rec-only weekly-only"><span>Dias</span>
-            <div class="wdays">${WD_SHORT.map((d, i) => `<button type="button" data-wd="${i}" class="${wdays.includes(i) ? 'on' : ''}">${WD_LETTER[i]}</button>`).join('')}</div></div>
-          <label class="field rec-only"><span>Intervalo</span>
-            <span class="inline">a cada <input id="f-interval" type="number" inputmode="numeric" min="1" max="99" value="${Math.max(1, parseInt(rec.interval, 10) || 1)}"> <em id="f-unit"></em></span></label>
-          <label class="field rec-only"><span>Termina</span>
-            <select id="f-end">
-              <option value="never" ${rec.end.type === 'never' ? 'selected' : ''}>Nunca</option>
-              <option value="count" ${rec.end.type === 'count' ? 'selected' : ''}>Após N vezes (parcelas)</option>
-              <option value="until" ${rec.end.type === 'until' ? 'selected' : ''}>Em uma data</option>
-            </select></label>
-          <label class="field rec-only end-count"><span>Nº de vezes</span><input id="f-count" type="number" inputmode="numeric" min="1" max="600" value="${rec.end.count || 12}"></label>
-          <label class="field rec-only end-until"><span>Até</span><input id="f-until" type="date" value="${rec.end.until || addDays(v.date, 365)}"></label>
-        </div>
-        <p class="preview rec-only" id="f-preview"></p>
+        <section class="wiz-page" data-page="1">
+          <div class="chip-row type-chips">${['despesa', 'receita', 'investimento'].map((k) => chip('type', k, TYPE_LABEL[k], type === k, `t-${k}`)).join('')}</div>
+          <div class="chip-row flow-chips inv-only">${chip('flow', 'aporte', '↗ Aporte', flow === 'aporte')}${chip('flow', 'resgate', '↙ Resgate', flow === 'resgate')}</div>
+          <div class="amount-display ${type}" id="f-amount"><span>R$</span><b></b></div>
+          <div class="keypad">${['1', '2', '3', '4', '5', '6', '7', '8', '9', '00', '0', 'del'].map((k) => `<button type="button" data-key="${k}" ${k === 'del' ? 'aria-label="Apagar"' : ''}>${k === 'del' ? ICONS.backspace : k}</button>`).join('')}</div>
+        </section>
 
-        <div class="form-list"><label class="field col"><span>Observações</span><textarea id="f-notes" rows="2" placeholder="Opcional">${esc(v.notes)}</textarea></label></div>
-        ${entry ? '<button type="button" class="btn ghost danger full" data-f="delete">Excluir</button>' : ''}
+        <section class="wiz-page" data-page="2">
+          <div class="form-list"><label class="field"><span>Descrição</span><input id="f-desc" value="${esc(v.description)}" placeholder="Opcional — ex.: Aluguel" autocomplete="off" enterkeyhint="done"></label></div>
+          <div id="f-cats">${categoryGrid(type, catId)}</div>
+        </section>
+
+        <section class="wiz-page" data-page="3">
+          <div class="lbl" id="f-date-lbl">${dateLabel()}</div>
+          <div class="chip-row" id="f-quick">
+            ${chip('quick', addDays(t, -1), 'Ontem', false)}${chip('quick', t, 'Hoje', false)}${chip('quick', addDays(t, 1), 'Amanhã', false)}
+            <input id="f-date" type="date" class="date-chip" value="${v.date}" required>
+          </div>
+
+          <div class="lbl">Repetir</div>
+          <div class="chip-row">${FREQS.map(([k, l]) => chip('freq', k, l, freq === k)).join('')}</div>
+
+          <div class="rec-only monthly-only">
+            <div class="lbl">Dia da cobrança</div>
+            <div class="chip-row scroll" id="f-mday">${Array.from({ length: 31 }, (_, i) => chip('mday', i + 1, i + 1, mday === i + 1, 'num')).join('')}${chip('mday', -1, 'Último dia', mday === -1)}</div>
+          </div>
+          <div class="rec-only weekly-only">
+            <div class="lbl">Dias da semana</div>
+            <div class="wdays">${WD_SHORT.map((d, i) => `<button type="button" data-wd="${i}" class="${wdays0.includes(i) ? 'on' : ''}" aria-label="${d}">${WD_LETTER[i]}</button>`).join('')}</div>
+          </div>
+          <div class="rec-only">
+            <div class="lbl">Intervalo</div>
+            <div class="stepper"><button type="button" data-interval="-1" aria-label="Menos">−</button><span>a cada <b id="f-interval">${interval}</b> <em id="f-unit"></em></span><button type="button" data-interval="1" aria-label="Mais">+</button></div>
+            <div class="lbl">Termina</div>
+            <div class="chip-row">${chip('end', 'never', 'Nunca', endType === 'never')}${chip('end', 'count', 'Após N vezes', endType === 'count')}${chip('end', 'until', 'Em uma data', endType === 'until')}</div>
+            <div class="stepper end-count"><button type="button" data-count="-1" aria-label="Menos">−</button><input id="f-count" type="number" inputmode="numeric" min="1" max="600" value="${rec.end.count || 12}"><span>vezes</span><button type="button" data-count="1" aria-label="Mais">+</button></div>
+            <div class="end-until"><input id="f-until" type="date" class="date-chip" value="${rec.end.until || addDays(v.date, 365)}"></div>
+            <p class="preview" id="f-preview"></p>
+          </div>
+
+          <div class="form-list" style="margin-top:14px">
+            ${seriesMode ? '' : `<label class="field switch-field"><span id="f-paid-lbl">${PAID_LABEL[type]}${occ && occ.recurring ? ' (esta ocorrência)' : ''}</span><input id="f-paid" type="checkbox" class="switch" ${v.paid ? 'checked' : ''}></label>`}
+            <label class="field col"><span>Observações</span><textarea id="f-notes" rows="2" placeholder="Opcional">${esc(v.notes)}</textarea></label>
+          </div>
+          ${entry ? '<button type="button" class="btn ghost danger full" data-f="delete">Excluir</button>' : ''}
+        </section>
       </form>
-    </div>`, (el, close) => {
+    </div>
+    <div class="wiz-foot"><button type="button" class="btn" data-f="back">Voltar</button><button type="button" class="btn primary" data-f="next">Próximo</button></div>`, (el, close) => {
     const form = $('.entry-form', el);
+    const body = $('.sheet-body', el);
     const f = (id) => $(`#f-${id}`, el);
+    const unitFor = (fr, n) => ({ daily: n > 1 ? 'dias' : 'dia', weekly: n > 1 ? 'semanas' : 'semana', monthly: n > 1 ? 'meses' : 'mês', yearly: n > 1 ? 'anos' : 'ano' }[fr] || '');
+    const setOn = (attr, value) => $$(`[data-${attr}]`, el).forEach((b) => b.classList.toggle('on', b.dataset[attr] === String(value)));
 
-    const suggestFromCategory = () => {
-      const c = store.category(f('cat').value);
-      if (!touchedFreq && !entry && c && c.group === 'fixo' && f('freq').value === 'none') { f('freq').value = 'monthly'; sync_(); }
-    };
-    const unitFor = (freq, n) => ({ daily: n > 1 ? 'dias' : 'dia', weekly: n > 1 ? 'semanas' : 'semana', monthly: n > 1 ? 'meses' : 'mês', yearly: n > 1 ? 'anos' : 'ano' }[freq] || '');
+    const renderAmount = () => { $('b', f('amount')).textContent = digitsDisplay(cents); };
+
+    function goto(n) {
+      step = n;
+      form.dataset.step = String(n);
+      $$('.wiz-step', el).forEach((b) => {
+        const i = +b.dataset.goto;
+        b.classList.toggle('cur', i === n);
+        b.classList.toggle('done', i < n);
+      });
+      const back = $('[data-f=back]', el), next = $('[data-f=next]', el);
+      back.style.visibility = n === 1 ? 'hidden' : 'visible';
+      next.textContent = n === 3 ? 'Salvar' : n === 1 ? 'Próximo: categoria' : 'Próximo: data';
+      body.scrollTop = 0;
+      if (n === 3) { const on = $('#f-mday .on', el); if (on) on.scrollIntoView({ block: 'nearest', inline: 'center' }); }
+    }
 
     function collect() {
-      const freq = f('freq').value;
       let recurrence = { freq: 'none' };
       if (freq !== 'none') {
-        const endType = f('end').value;
         recurrence = {
           freq,
-          interval: Math.max(1, parseInt(f('interval').value, 10) || 1),
+          interval,
           end: endType === 'count' ? { type: 'count', count: Math.max(1, parseInt(f('count').value, 10) || 1) }
             : endType === 'until' ? { type: 'until', until: f('until').value } : { type: 'never' },
         };
-        if (freq === 'monthly') recurrence.byMonthDay = Number(f('mday').value);
+        if (freq === 'monthly') recurrence.byMonthDay = mday;
         if (freq === 'weekly') recurrence.byWeekday = $$('.wdays .on', el).map((b) => +b.dataset.wd);
       }
-      const c = store.category(f('cat').value);
+      const c = store.category(catId);
       return {
         type,
         flow: type === 'investimento' ? flow : undefined,
         amount: cents,
         description: f('desc').value.trim() || (c ? c.name : 'Sem descrição'),
-        categoryId: f('cat').value,
+        categoryId: catId,
         date: f('date').value,
         paid: f('paid') ? f('paid').checked : false,
         notes: f('notes').value.trim(),
@@ -785,12 +819,12 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
     }
 
     function sync_() {
-      const freq = f('freq').value;
       form.dataset.freq = freq;
-      form.dataset.end = f('end').value;
-      f('unit').textContent = unitFor(freq, parseInt(f('interval').value, 10) || 1);
-      if (!occ || !occ.recurring) f('date-lbl').textContent = freq === 'none' ? 'Data' : 'Começa em';
-      // prévia das próximas datas, como na agenda
+      form.dataset.end = endType;
+      f('interval').textContent = interval;
+      f('unit').textContent = unitFor(freq, interval);
+      f('date-lbl').textContent = dateLabel();
+      setOn('quick', f('date').value);
       const vals = collect();
       // novo lançamento: "pago" por padrão só se a primeira cobrança já passou
       if (!touchedPaid && !entry && f('paid') && vals.date) {
@@ -810,58 +844,90 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
       }
     }
 
-    // valor estilo caixa eletrônico
-    const amt = f('amount');
-    amt.addEventListener('input', () => {
-      cents = centsFromDigits(amt.value);
-      amt.value = cents ? digitsDisplay(cents) : '';
-    });
-    if (!entry) setTimeout(() => amt.focus(), 320);
+    function setType(k) {
+      type = k;
+      form.dataset.kind = k;
+      setOn('type', k);
+      f('amount').className = `amount-display ${k}`;
+      const c = store.category(catId);
+      const fits = c && (k === 'despesa' ? c.group === 'fixo' || c.group === 'variavel' : c.group === k);
+      if (!fits) catId = '';
+      f('cats').innerHTML = categoryGrid(k, catId);
+      if (f('paid-lbl')) f('paid-lbl').textContent = PAID_LABEL[k] + (occ && occ.recurring ? ' (esta ocorrência)' : '');
+    }
+
+    function press(k) {
+      if (k === 'del') cents = Math.floor(cents / 10);
+      else if (String(cents).length < 11) cents = parseInt(`${cents}${k}`, 10);
+      renderAmount();
+    }
+
+    function validateStep(n) {
+      if (n === 1 && !cents) { toast('Digite o valor', 'err'); return false; }
+      if (n === 2 && !catId) { toast('Escolha uma categoria', 'err'); return false; }
+      return true;
+    }
 
     el.addEventListener('click', async (e) => {
-      const tb = e.target.closest('.type-seg [data-type]');
-      if (tb) {
-        type = tb.dataset.type;
-        form.dataset.kind = type;
-        $$('.type-seg button', el).forEach((b) => b.classList.toggle('on', b === tb));
-        $('.amount', el).className = `amount ${type}`;
-        f('cat').innerHTML = categoryOptions(type, '');
-        if (f('paid-lbl')) f('paid-lbl').textContent = PAID_LABEL[type] + (occ && occ.recurring ? ' (esta ocorrência)' : '');
-        suggestFromCategory();
+      const b = e.target.closest('button');
+      if (!b) return;
+      const d = b.dataset;
+      if (d.key) { press(d.key); return; }
+      if (d.type) { setType(d.type); return; }
+      if (d.flow) { flow = d.flow; setOn('flow', flow); return; }
+      if (d.goto) { goto(+d.goto); return; }
+      if (d.cat) {
+        catId = d.cat;
+        setOn('cat', catId);
+        const c = store.category(catId);
+        if (!touchedFreq && !entry && c && c.group === 'fixo' && freq === 'none') { freq = 'monthly'; setOn('freq', freq); sync_(); }
         return;
       }
-      const fb = e.target.closest('[data-flow]');
-      if (fb) { flow = fb.dataset.flow; $$('.flow-seg button', el).forEach((b) => b.classList.toggle('on', b === fb)); return; }
-      const wd = e.target.closest('[data-wd]');
-      if (wd) { wd.classList.toggle('on'); sync_(); return; }
-      const act = e.target.closest('[data-f]');
-      if (!act) return;
-      if (act.dataset.f === 'delete') { if (await deleteFlow(entry, occ)) close(); return; }
-      if (act.dataset.f === 'save') await save();
+      if (d.quick) { f('date').value = d.quick; f('date').dispatchEvent(new Event('change')); return; }
+      if (d.freq) { freq = d.freq; touchedFreq = true; setOn('freq', freq); sync_(); return; }
+      if (d.mday) { mday = +d.mday; touchedMday = true; setOn('mday', mday); sync_(); return; }
+      if (d.wd !== undefined) { b.classList.toggle('on'); sync_(); return; }
+      if (d.interval) { interval = Math.min(99, Math.max(1, interval + +d.interval)); sync_(); return; }
+      if (d.count) { f('count').value = Math.min(600, Math.max(1, (parseInt(f('count').value, 10) || 1) + +d.count)); sync_(); return; }
+      if (d.end) { endType = d.end; setOn('end', endType); sync_(); return; }
+      if (d.f === 'back') { goto(Math.max(1, step - 1)); return; }
+      if (d.f === 'next') { if (step < 3) { if (validateStep(step)) goto(step + 1); } else await save(); return; }
+      if (d.f === 'delete') { if (await deleteFlow(entry, occ)) close(); return; }
+      if (d.f === 'save') await save();
     });
-    f('freq').addEventListener('change', () => { touchedFreq = true; sync_(); });
-    f('cat').addEventListener('change', suggestFromCategory);
-    f('mday').addEventListener('change', () => { touchedMday = true; sync_(); });
+
+    // teclado físico (computador) no passo do valor
+    el.addEventListener('keydown', (e) => {
+      if (step !== 1 || e.target.matches('input, textarea')) return;
+      if (/^[0-9]$/.test(e.key)) { press(e.key); e.preventDefault(); }
+      else if (e.key === 'Backspace') { press('del'); e.preventDefault(); }
+      else if (e.key === 'Enter') { $('[data-f=next]', el).click(); e.preventDefault(); }
+    });
+
     if (f('paid')) f('paid').addEventListener('change', () => { touchedPaid = true; });
     f('date').addEventListener('change', () => {
-      const d = f('date').value;
-      if (!d) return;
-      if (!touchedMday) f('mday').value = String(parseISO(d).d);
-      if ($$('.wdays .on', el).length <= 1 && !entry) $$('.wdays button', el).forEach((b) => b.classList.toggle('on', +b.dataset.wd === weekday(d)));
+      const dt = f('date').value;
+      if (!dt) return;
+      if (!touchedMday) { mday = parseISO(dt).d; setOn('mday', mday); }
+      if ($$('.wdays .on', el).length <= 1 && !entry) $$('.wdays button', el).forEach((b) => b.classList.toggle('on', +b.dataset.wd === weekday(dt)));
       sync_();
     });
-    ['interval', 'end', 'count', 'until'].forEach((id) => f(id).addEventListener('input', sync_));
-    f('end').addEventListener('change', sync_);
+    ['count', 'until'].forEach((id) => f(id).addEventListener('input', sync_));
+
+    renderAmount();
     sync_();
+    goto(1);
+    el.tabIndex = -1;
+    el.focus({ preventScroll: true });
 
     async function save() {
       const vals = collect();
-      if (!vals.amount) { toast('Informe o valor', 'err'); amt.focus(); return; }
-      if (!vals.date) { toast('Informe a data', 'err'); return; }
-      if (!vals.categoryId) { toast('Escolha uma categoria', 'err'); return; }
+      if (!vals.amount) { toast('Digite o valor', 'err'); goto(1); return; }
+      if (!vals.categoryId) { toast('Escolha uma categoria', 'err'); goto(2); return; }
+      if (!vals.date) { toast('Informe a data', 'err'); goto(3); return; }
       const r = vals.recurrence;
-      if (r.freq === 'weekly' && !r.byWeekday.length) { toast('Escolha ao menos um dia da semana', 'err'); return; }
-      if (r.freq !== 'none' && r.end.type === 'until' && (!r.end.until || r.end.until < vals.date)) { toast('A data final deve ser depois do início', 'err'); return; }
+      if (r.freq === 'weekly' && !r.byWeekday.length) { toast('Escolha ao menos um dia da semana', 'err'); goto(3); return; }
+      if (r.freq !== 'none' && r.end.type === 'until' && (!r.end.until || r.end.until < vals.date)) { toast('A data final deve ser depois do início', 'err'); goto(3); return; }
 
       let result;
       if (!entry) result = createEntry(uid(), vals);
