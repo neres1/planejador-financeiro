@@ -358,3 +358,27 @@ b { font-weight: 600; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* Login / conta */
+body.locked .topbar, body.locked .tabbar { display: none; }
+body.locked .view { padding-bottom: calc(var(--safe-bottom) + 24px); }
+.auth-wrap { max-width: 420px; margin: 0 auto; padding: calc(var(--safe-top) + 28px) 0 24px; }
+.auth-brand { text-align: center; margin-bottom: 20px; }
+.auth-brand img { width: 64px; height: 64px; border-radius: 16px; }
+.auth-brand h1 { font-size: 20px; margin: 10px 0 0; }
+.auth-card h2 { font-size: 22px; margin: 0 0 12px; }
+.auth-card .note { margin: 0 0 14px; }
+.auth-card .form-list { margin-bottom: 12px; }
+.auth-card .field input { text-align: left; }
+.auth-card .field > span:first-child { min-width: 118px; }
+.auth-card .field.col input { min-height: 36px; }
+.auth-link { display: block; margin: 14px auto 0; }
+.auth-link.danger { color: var(--danger); }
+.auth-error { color: var(--danger); font-weight: 600; font-size: 14px; margin: 0 4px 12px; }
+.auth-info { color: var(--brand-ink); font-size: 14px; margin: 0 4px 12px; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .04em; }
+.rk-box { background: var(--card); border: 2px dashed var(--brand); border-radius: 14px; padding: 16px; font-size: 18px; font-weight: 700; text-align: center; word-break: break-all; user-select: all; -webkit-user-select: all; }
+.rk-confirm { display: flex; align-items: center; gap: 10px; margin: 16px 4px 4px; font-size: 15px; }
+.rk-confirm input { width: 22px; height: 22px; accent-color: var(--brand); }
+.btn:disabled { opacity: .45; }
+.account { margin: 0 0 6px; }

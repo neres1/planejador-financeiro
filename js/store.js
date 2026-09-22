@@ -1,10 +1,13 @@
-// Documento de dados + persistência local + mesclagem (para sincronizar entre aparelhos).
+// Documento de dados + cópia local criptografada (por usuário) + mesclagem entre aparelhos.
 //
 // doc = { schema, updatedAt, categories: [...], entries: [...] }
 // Cada item tem `id` e `updatedAt`; exclusões viram "lápides" { id, deleted: true, updatedAt }
 // para que a exclusão também se propague para os outros aparelhos.
 
-const KEY = 'pf:data:v1';
+import { encryptJSON, decryptJSON } from './crypto.js';
+
+const PREFIX = 'pf:u:';
+const LEGACY_KEYS = ['pf:data:v1', 'pf:github', 'pf:sync'];
 const EPOCH = '2000-01-01T00:00:00.000Z';
 
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -74,35 +77,85 @@ export function validateDoc(doc) {
   return doc && typeof doc === 'object' && Array.isArray(doc.entries) && Array.isArray(doc.categories);
 }
 
-function load() {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const doc = JSON.parse(raw);
-      if (validateDoc(doc)) return doc;
-    }
-  } catch { /* armazenamento indisponível */ }
-  return emptyDoc();
-}
-
 const listeners = new Set();
 
 export const store = {
-  doc: load(),
+  doc: emptyDoc(),
+  uid: null,
+  key: null,        // CryptoKey da chave de dados do usuário
+  dirty: new Set(), // ids alterados aqui e ainda não enviados ao servidor
+  cursor: null,     // até onde já baixamos do servidor
+  _saving: Promise.resolve(),
 
   onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },
 
+  // Abre a cópia local (criptografada) do usuário.
+  async open(uid, key) {
+    this.uid = uid;
+    this.key = key;
+    this.doc = emptyDoc();
+    this.dirty = new Set();
+    this.cursor = null;
+    try { for (const k of LEGACY_KEYS) localStorage.removeItem(k); } catch { /* nada */ }
+    try {
+      const blob = localStorage.getItem(PREFIX + uid);
+      if (blob) {
+        const saved = await decryptJSON(key, blob);
+        if (validateDoc(saved.doc)) {
+          this.doc = saved.doc;
+          this.dirty = new Set(saved.dirty || []);
+          this.cursor = saved.cursor || null;
+        }
+      }
+    } catch { /* cópia local ilegível: recomeça e baixa tudo do servidor */ }
+  },
+
+  close({ wipe = false } = {}) {
+    if (wipe && this.uid) { try { localStorage.removeItem(PREFIX + this.uid); } catch { /* nada */ } }
+    this.uid = null;
+    this.key = null;
+    this.doc = emptyDoc();
+    this.dirty = new Set();
+    this.cursor = null;
+  },
+
   persist() {
-    try { localStorage.setItem(KEY, JSON.stringify(this.doc)); } catch { /* cheio / privado */ }
+    if (!this.key || !this.uid) return this._saving;
+    const uid = this.uid, key = this.key;
+    const snapshot = { doc: this.doc, dirty: [...this.dirty], cursor: this.cursor };
+    this._saving = this._saving
+      .then(() => encryptJSON(key, snapshot))
+      .then((b64) => { if (this.uid === uid) localStorage.setItem(PREFIX + uid, b64); })
+      .catch(() => { /* cheio / privado */ });
+    return this._saving;
+  },
+
+  // Item (lançamento ou categoria) pelo id, com o tipo.
+  find(id) {
+    const c = this.doc.categories.find((x) => x.id === id);
+    if (c) return { kind: 'category', item: c };
+    const e = this.doc.entries.find((x) => x.id === id);
+    return e ? { kind: 'entry', item: e } : null;
+  },
+
+  // Aplica itens vindos do servidor: vence a versão alterada por último.
+  applyRemote(items) {
+    let changed = false;
+    for (const r of items) {
+      const cur = this.find(r.item.id);
+      if (cur && (cur.item.updatedAt || '') >= (r.item.updatedAt || '')) continue;
+      const list = cur ? (cur.kind === 'category' ? 'categories' : 'entries') : (r.kind === 'category' ? 'categories' : 'entries');
+      const i = this.doc[list].findIndex((x) => x.id === r.item.id);
+      if (i >= 0) this.doc[list][i] = r.item; else this.doc[list].push(r.item);
+      this.dirty.delete(r.item.id);
+      changed = true;
+    }
+    if (changed) this.emit(false); else this.persist();
+    return changed;
   },
 
   // `local: true` = alteração feita pelo usuário (dispara sincronização).
   emit(local) { this.persist(); for (const fn of listeners) fn({ local }); },
-
-  replace(doc, { local = false } = {}) {
-    this.doc = { ...doc, categories: mergeList(doc.categories), entries: mergeList(doc.entries) };
-    this.emit(local);
-  },
 
   categories() { return this.doc.categories.filter((c) => !c.deleted); },
   entries() { return this.doc.entries.filter((e) => !e.deleted); },
@@ -115,6 +168,7 @@ export const store = {
       const next = { ...item, updatedAt: stamp };
       const i = this.doc[list].findIndex((x) => x.id === item.id);
       if (i >= 0) this.doc[list][i] = next; else this.doc[list].push(next);
+      this.dirty.add(item.id);
     }
     this.doc.updatedAt = stamp;
     this.emit(true);
@@ -128,9 +182,14 @@ export const store = {
   saveCategory(c) { this._upsert('categories', [c]); },
   deleteCategory(id) { this._upsert('categories', [{ id, deleted: true }]); },
 
-  resetLocal() {
-    try { localStorage.removeItem(KEY); } catch { /* nada */ }
-    this.doc = emptyDoc();
-    this.emit(false);
+  // Importa um backup JSON: tudo que for mais novo entra e é enviado ao servidor.
+  importDoc(doc) {
+    const merged = merge(this.doc, doc);
+    for (const x of [...merged.categories, ...merged.entries]) {
+      const cur = this.find(x.id);
+      if (!cur || cur.item !== x) this.dirty.add(x.id);
+    }
+    this.doc = merged;
+    this.emit(true);
   },
 };

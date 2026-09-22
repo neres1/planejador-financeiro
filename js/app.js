@@ -6,12 +6,17 @@ import {
   money, moneyCompact, esc, fmtMonth, fmtDayHeader, fmtShort, fmtFull, fmtDateBR,
   fmtRelativeTime, centsFromDigits, digitsDisplay, WD_SHORT, WD_LETTER, MONTHS,
 } from './format.js';
-import { store, uid, GROUPS, merge, validateDoc } from './store.js';
+import { store, uid, GROUPS, validateDoc } from './store.js';
 import {
   createEntry, updateSingle, applyThis, applyAll, applyFuture, deleteOccurrence,
   togglePaid, isStructuralChange, formCount,
 } from './series.js';
-import { sync, loadConfig, saveConfig, clearConfig, isConfigured, testRepo } from './github.js';
+import { cloud } from './cloud.js';
+import { auth, db } from './supa.js';
+import { keystore } from './keystore.js';
+import {
+  createVault, unlockWithPassword, unlockWithRecovery, rewrapPassword, rewrapRecovery, importDataKey,
+} from './crypto.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -366,10 +371,6 @@ function renderRecurring() {
 }
 
 function renderSettings() {
-  const cfg = loadConfig();
-  // No GitHub Pages (usuario.github.io) o dono do repositório já é conhecido.
-  if (!cfg.owner && location.hostname.endsWith('.github.io')) cfg.owner = location.hostname.split('.')[0];
-  if (!cfg.repo) cfg.repo = 'planejador-financeiro-dados';
   const cats = store.categories();
   const catGroup = (g) => `
     <div class="section-title">${GROUPS[g].label}</div>
@@ -380,21 +381,17 @@ function renderSettings() {
       <button class="more" data-action="add-cat" data-group="${g}">+ Nova categoria</button>
     </div>`;
   return `
-    <div class="section-title">Sincronização com o GitHub</div>
+    <div class="section-title">Conta</div>
     <section class="card">
+      <p class="account">👤 <b>${esc(auth.session && auth.session.user ? auth.session.user.email : '')}</b></p>
       <p class="sync-line" id="sync-line">${syncLine()}</p>
-      <form id="gh-form" class="form-list" autocomplete="off" onsubmit="return false">
-        <label class="field"><span>Usuário do GitHub</span><input name="owner" value="${esc(cfg.owner || '')}" placeholder="seu-usuario" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
-        <label class="field"><span>Repositório de dados</span><input name="repo" value="${esc(cfg.repo || '')}" placeholder="planejador-financeiro-dados" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
-        <label class="field"><span>Branch</span><input name="branch" value="${esc(cfg.branch || 'main')}" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
-        <label class="field"><span>Arquivo</span><input name="path" value="${esc(cfg.path || 'financas.json')}" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
-        <label class="field"><span>Token</span><input name="token" type="password" value="" placeholder="${cfg.token ? '•••••••• (salvo — deixe em branco para manter)' : 'github_pat_…'}" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
-      </form>
       <div class="btn-row">
-        <button class="btn primary" data-action="gh-save">Salvar e conectar</button>
-        ${isConfigured(cfg) ? `<button class="btn" data-action="gh-sync">Sincronizar agora</button><button class="btn ghost danger" data-action="gh-disconnect">Desconectar</button>` : ''}
+        <button class="btn" data-action="sync">Sincronizar agora</button>
+        <button class="btn" data-action="change-password">Trocar senha</button>
+        <button class="btn" data-action="new-recovery">Nova chave de recuperação</button>
       </div>
-      <p class="note">Use um repositório <b>privado</b> e um token <i>fine-grained</i> com acesso só a ele (permissão <b>Contents: Read and write</b>). O token fica salvo apenas neste aparelho. Passo a passo no README do projeto.</p>
+      <button class="btn ghost danger full" data-action="logout">Sair desta conta</button>
+      <p class="note">🔒 Seus lançamentos são criptografados neste aparelho antes de irem ao servidor. Nem o servidor consegue lê-los — por isso guarde bem sua <b>chave de recuperação</b>.</p>
     </section>
 
     ${catGroup('fixo')}${catGroup('variavel')}${catGroup('receita')}
@@ -405,8 +402,7 @@ function renderSettings() {
         <button class="btn" data-action="export">Exportar JSON</button>
         <label class="btn">Importar JSON<input type="file" id="import-file" accept="application/json,.json" hidden></label>
       </div>
-      <button class="btn ghost danger full" data-action="reset-local">Apagar dados deste aparelho</button>
-      <p class="note">Apagar remove só a cópia local; com o GitHub conectado os dados voltam na próxima sincronização.</p>
+      <p class="note">O arquivo exportado <b>não</b> é criptografado — guarde-o em local seguro.</p>
     </section>
 
     <div class="section-title">Instalar no iPhone</div>
@@ -414,7 +410,7 @@ function renderSettings() {
       <ol class="steps">
         <li>Abra este site no <b>Safari</b>.</li>
         <li>Toque em <b>Compartilhar</b> (quadrado com seta) → <b>Adicionar à Tela de Início</b>.</li>
-        <li>Abra pelo ícone e conecte o GitHub aqui em Ajustes (o app instalado tem armazenamento próprio, separado do Safari).</li>
+        <li>Abra pelo ícone e entre com seu e-mail e senha (o app instalado tem armazenamento próprio, separado do Safari).</li>
       </ol>
     </section>
     <p class="note center">Planejador Financeiro · dados em ${store.entries().length} lançamentos</p>`;
@@ -424,21 +420,21 @@ function renderSettings() {
 // Cabeçalho, barra de abas e sincronização
 
 function syncLine() {
-  if (!isConfigured()) return 'Não conectado — os dados ficam salvos só neste aparelho.';
-  const last = sync.meta.lastSync ? `Última sincronização: ${fmtRelativeTime(sync.meta.lastSync)}.` : '';
-  switch (sync.state) {
+  const last = cloud.lastSync ? `Última sincronização: ${fmtRelativeTime(cloud.lastSync)}.` : '';
+  switch (cloud.state) {
     case 'syncing': return 'Sincronizando…';
-    case 'error': return `⚠️ Erro: ${esc(sync.message)}`;
-    case 'offline': return `Sem internet — alterações serão enviadas depois. ${last}`;
-    default: return `✓ Conectado a <b>${esc(loadConfig().owner)}/${esc(loadConfig().repo)}</b>. ${last}`;
+    case 'error': return `⚠️ Erro ao sincronizar: ${esc(cloud.message)}`;
+    case 'auth': return `⚠️ ${esc(cloud.message)}`;
+    case 'offline': return `Sem internet — as alterações serão enviadas depois. ${last}`;
+    case 'ok': return `✓ Dados sincronizados. ${last}`;
+    default: return 'Conectando…';
   }
 }
 
 function syncIcon() {
-  if (!isConfigured()) return { icon: ICONS.cloudOff, cls: 'muted', label: 'GitHub não conectado' };
-  switch (sync.state) {
+  switch (cloud.state) {
     case 'syncing': return { icon: ICONS.sync, cls: 'brand', label: 'Sincronizando' };
-    case 'error': return { icon: ICONS.cloudAlert, cls: 'danger', label: 'Erro de sincronização' };
+    case 'error': case 'auth': return { icon: ICONS.cloudAlert, cls: 'danger', label: 'Erro de sincronização' };
     case 'offline': return { icon: ICONS.cloudOff, cls: 'muted', label: 'Sem internet' };
     case 'ok': return { icon: ICONS.cloudCheck, cls: 'brand', label: 'Sincronizado' };
     default: return { icon: ICONS.cloud, cls: 'muted', label: 'Sincronização' };
@@ -881,35 +877,6 @@ function exportJSON() {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
-async function ghSave() {
-  const form = $('#gh-form');
-  const old = loadConfig();
-  const cfg = {
-    owner: form.owner.value.trim(),
-    repo: form.repo.value.trim(),
-    branch: form.branch.value.trim() || 'main',
-    path: form.path.value.trim().replace(/^\/+/, '') || 'financas.json',
-    token: form.token.value.trim() || old.token || '',
-  };
-  if (!cfg.owner || !cfg.repo || !cfg.token) { toast('Preencha usuário, repositório e token', 'err'); return; }
-  toast('Testando conexão…');
-  try {
-    const info = await testRepo(cfg);
-    if (!info.canPush) { toast('O token não tem permissão de escrita nesse repositório', 'err'); return; }
-    if (!info.private) {
-      const go = await actionSheet(`Atenção: ${info.fullName} é PÚBLICO — qualquer pessoa poderá ver seus dados. Usar mesmo assim?`, [{ label: 'Usar repositório público', value: true, style: 'destructive' }]);
-      if (!go) return;
-    }
-    saveConfig(cfg);
-    render();
-    await sync.run();
-    if (sync.state === 'ok') toast('Conectado e sincronizado ✓');
-    else toast(sync.message || 'Falha ao sincronizar', 'err');
-  } catch (e) {
-    toast(e.message, 'err');
-  }
-}
-
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]');
   if (!el || el.closest('.sheet')) return;
@@ -943,22 +910,17 @@ document.addEventListener('click', async (e) => {
     case 'day': ui.day = el.dataset.date; render(); break;
     case 'toggle-ended': ui.showEnded = !ui.showEnded; render(); break;
     case 'sync':
-      if (isConfigured()) { sync.run(); if (sync.state === 'error') toast(sync.message, 'err'); }
-      else { ui.tab = 'settings'; render(); }
+      await cloud.run();
+      if (cloud.state === 'error' || cloud.state === 'auth') toast(cloud.message, 'err');
+      else if (ui.tab !== 'settings' && cloud.state === 'ok') toast('Sincronizado ✓');
       break;
     case 'edit-cat': openCategoryForm(store.category(el.dataset.id)); break;
     case 'add-cat': openCategoryForm(null, el.dataset.group); break;
-    case 'gh-save': ghSave(); break;
-    case 'gh-sync': sync.run(); break;
-    case 'gh-disconnect': {
-      const ok = await actionSheet('Desconectar do GitHub? Os dados continuam neste aparelho e no repositório.', [{ label: 'Desconectar', value: true, style: 'destructive' }]);
-      if (ok) { clearConfig(); sync.meta = {}; sync._set('off'); render(); }
-      break;
-    }
-    case 'export': exportJSON(); break;
-    case 'reset-local': {
-      const ok = await actionSheet('Apagar todos os dados deste aparelho?', [{ label: 'Apagar dados locais', value: true, style: 'destructive' }]);
-      if (ok) { store.resetLocal(); toast('Dados locais apagados'); if (isConfigured()) sync.run(); }
+    case 'change-password': openChangePassword(); break;
+    case 'new-recovery': openNewRecovery(); break;
+    case 'logout': {
+      const ok = await actionSheet(cloud.state === 'ok' || !store.dirty.size ? 'Sair desta conta neste aparelho?' : 'Há alterações ainda não enviadas (sem internet). Se sair agora, elas serão perdidas. Sair mesmo assim?', [{ label: 'Sair', value: true, style: 'destructive' }]);
+      if (ok) logout();
       break;
     }
   }
@@ -978,7 +940,7 @@ document.addEventListener('change', async (e) => {
   try {
     const doc = JSON.parse(await file.text());
     if (!validateDoc(doc)) throw new Error('Arquivo inválido');
-    store.replace(merge(store.doc, doc), { local: true });
+    store.importDoc(doc);
     toast(`Importado: ${doc.entries.filter((x) => !x.deleted).length} lançamentos`);
   } catch (err) {
     toast(`Não foi possível importar: ${err.message}`, 'err');
@@ -987,23 +949,362 @@ document.addEventListener('change', async (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// Conta: login, convite, recuperação e chave de recuperação
+
+const MIN_PASSWORD = 10;
+const siteURL = () => location.origin + location.pathname;
+
+function lock() {
+  document.body.classList.add('locked');
+  $('#topbar').innerHTML = '';
+  $('#tabbar').innerHTML = '';
+}
+
+function authShell(inner) {
+  lock();
+  $('#view').innerHTML = `<div class="auth-wrap"><div class="auth-brand"><img src="icons/icon.svg" alt=""><h1>Planejador Financeiro</h1></div>${inner}</div>`;
+  window.scrollTo(0, 0);
+}
+
+function busy(form, on, label) {
+  const b = $('button[type=submit]', form);
+  if (!b) return;
+  if (on) { b.dataset.label = b.textContent; b.textContent = label || 'Aguarde…'; b.disabled = true; }
+  else { b.textContent = b.dataset.label || b.textContent; b.disabled = false; }
+}
+
+function formError(form, msg) {
+  const el = $('.auth-error', form);
+  el.textContent = msg || '';
+  el.hidden = !msg;
+}
+
+function checkNewPassword(pw, pw2) {
+  if (pw.length < MIN_PASSWORD) return `A senha precisa ter pelo menos ${MIN_PASSWORD} caracteres.`;
+  if (pw !== pw2) return 'As senhas não coincidem.';
+  return '';
+}
+
+const pwFields = (autocomplete = 'new-password') => `
+  <label class="field"><span>Nova senha</span><input name="pw" type="password" autocomplete="${autocomplete}" minlength="${MIN_PASSWORD}" required placeholder="mín. ${MIN_PASSWORD} caracteres"></label>
+  <label class="field"><span>Repetir senha</span><input name="pw2" type="password" autocomplete="${autocomplete}" required></label>`;
+
+async function enterApp(key) {
+  const uid = auth.session.user.id;
+  await keystore.set(uid, key).catch(() => {});
+  await store.open(uid, key);
+  document.body.classList.remove('locked');
+  render();
+  cloud.run();
+}
+
+async function logout() {
+  const uid = auth.session && auth.session.user && auth.session.user.id;
+  store.close({ wipe: true });
+  if (uid) await keystore.remove(uid);
+  await auth.signOut();
+  cloud._set('idle');
+  showLogin();
+}
+
+// Cria o cofre (primeiro acesso): gera chave de dados e chave de recuperação.
+async function setupVault(password) {
+  const { vault, raw, recoveryKey } = await createVault(password);
+  await db.createVault(vault);
+  const key = await importDataKey(raw);
+  showRecoveryKey(recoveryKey, () => enterApp(key), { first: true });
+}
+
+function showLogin({ email = '', error = '', info = '' } = {}) {
+  authShell(`
+    <form class="auth-card" id="login-form" autocomplete="on">
+      <h2>Entrar</h2>
+      <div class="form-list">
+        <label class="field"><span>E-mail</span><input name="email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" value="${esc(email)}" required></label>
+        <label class="field"><span>Senha</span><input name="pw" type="password" autocomplete="current-password" required></label>
+      </div>
+      <p class="auth-error" ${error ? '' : 'hidden'}>${esc(error)}</p>
+      ${info ? `<p class="auth-info">${esc(info)}</p>` : ''}
+      <button type="submit" class="btn primary big full">Entrar</button>
+      <button type="button" class="link auth-link" data-f="forgot">Esqueci minha senha</button>
+      <p class="note center">Acesso somente por convite.</p>
+    </form>`);
+  const form = $('#login-form');
+  $('[data-f=forgot]', form).addEventListener('click', () => showForgot(form.email.value.trim()));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    formError(form, '');
+    const email = form.email.value.trim(), pw = form.pw.value;
+    busy(form, true, 'Entrando…');
+    try {
+      await auth.signIn(email, pw);
+      const vault = await db.getVault();
+      if (!vault) { await setupVault(pw); return; }
+      let raw;
+      try { raw = await unlockWithPassword(vault, pw); }
+      catch { showNeedRecovery(pw); return; }
+      await enterApp(await importDataKey(raw));
+    } catch (err) {
+      busy(form, false);
+      formError(form, navigator.onLine ? err.message : 'Sem internet. Conecte-se para entrar.');
+    }
+  });
+}
+
+function showForgot(email = '') {
+  authShell(`
+    <form class="auth-card" id="forgot-form">
+      <h2>Redefinir senha</h2>
+      <p class="note">Enviaremos um link para o seu e-mail. Depois de criar a nova senha, você vai precisar da sua <b>chave de recuperação</b> para destravar os dados.</p>
+      <div class="form-list">
+        <label class="field"><span>E-mail</span><input name="email" type="email" autocomplete="username" autocapitalize="off" value="${esc(email)}" required></label>
+      </div>
+      <p class="auth-error" hidden></p>
+      <button type="submit" class="btn primary big full">Enviar link</button>
+      <button type="button" class="link auth-link" data-f="back">Voltar</button>
+    </form>`);
+  const form = $('#forgot-form');
+  $('[data-f=back]', form).addEventListener('click', () => showLogin({ email: form.email.value.trim() }));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    busy(form, true, 'Enviando…');
+    try {
+      await auth.requestReset(form.email.value.trim(), siteURL());
+      showLogin({ email: form.email.value.trim(), info: 'Se o e-mail estiver cadastrado, você receberá um link em instantes (confira o spam). O e-mail vem em inglês: "Reset Your Password".' });
+    } catch (err) { busy(form, false); formError(form, err.message); }
+  });
+}
+
+// Convite aceito: a pessoa define a senha e ganha a chave de recuperação.
+function showSetPassword() {
+  authShell(`
+    <form class="auth-card" id="setpw-form">
+      <h2>Bem-vindo(a)!</h2>
+      <p class="note">Crie a senha da sua conta <b>${esc(auth.session.user.email)}</b>.</p>
+      <div class="form-list">${pwFields()}</div>
+      <p class="auth-error" hidden></p>
+      <button type="submit" class="btn primary big full">Criar senha</button>
+    </form>`);
+  const form = $('#setpw-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pw = form.pw.value;
+    const bad = checkNewPassword(pw, form.pw2.value);
+    if (bad) { formError(form, bad); return; }
+    busy(form, true, 'Preparando…');
+    try {
+      await auth.setPassword(pw);
+      const vault = await db.getVault();
+      if (!vault) await setupVault(pw);
+      else {
+        // já tinha cofre (convite reenviado): trata como redefinição
+        busy(form, false);
+        showRecovery();
+      }
+    } catch (err) { busy(form, false); formError(form, err.message); }
+  });
+}
+
+// Link de "esqueci a senha": nova senha + chave de recuperação.
+function showRecovery() {
+  authShell(`
+    <form class="auth-card" id="recover-form">
+      <h2>Nova senha</h2>
+      <p class="note">Conta <b>${esc(auth.session.user.email)}</b>. Para destravar seus dados, informe também a <b>chave de recuperação</b> que você guardou.</p>
+      <div class="form-list">
+        ${pwFields()}
+        <label class="field col"><span>Chave de recuperação</span><input name="rk" class="mono" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" required></label>
+      </div>
+      <p class="auth-error" hidden></p>
+      <button type="submit" class="btn primary big full">Redefinir e entrar</button>
+      <button type="button" class="link auth-link danger" data-f="lost">Perdi a chave de recuperação</button>
+    </form>`);
+  const form = $('#recover-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pw = form.pw.value;
+    const bad = checkNewPassword(pw, form.pw2.value);
+    if (bad) { formError(form, bad); return; }
+    busy(form, true, 'Verificando…');
+    try {
+      const vault = await db.getVault();
+      if (!vault) { await auth.setPassword(pw); await setupVault(pw); return; }
+      let raw;
+      try { raw = await unlockWithRecovery(vault, form.rk.value); }
+      catch { busy(form, false); formError(form, 'Chave de recuperação incorreta.'); return; }
+      await auth.setPassword(pw);
+      await db.updateVault(await rewrapPassword(raw, pw));
+      toast('Senha redefinida ✓');
+      await enterApp(await importDataKey(raw));
+    } catch (err) { busy(form, false); formError(form, err.message); }
+  });
+  $('[data-f=lost]', form).addEventListener('click', async () => {
+    const pw = form.pw.value;
+    const bad = checkNewPassword(pw, form.pw2.value);
+    if (bad) { formError(form, `Preencha a nova senha primeiro. ${bad}`); return; }
+    const ok = await actionSheet('Sem a chave de recuperação não é possível ler os dados antigos. Apagar todos os dados da conta e começar do zero?', [{ label: 'Apagar tudo e recomeçar', value: true, style: 'destructive' }]);
+    if (!ok) return;
+    busy(form, true, 'Recomeçando…');
+    try {
+      await auth.setPassword(pw);
+      await db.deleteAllItems();
+      const { vault, raw, recoveryKey } = await createVault(pw);
+      await db.updateVault(vault);
+      store.close({ wipe: false });
+      try { localStorage.removeItem(`pf:u:${auth.session.user.id}`); } catch { /* nada */ }
+      const key = await importDataKey(raw);
+      showRecoveryKey(recoveryKey, () => enterApp(key), { first: true });
+    } catch (err) { busy(form, false); formError(form, err.message); }
+  });
+}
+
+// Senha aceita pelo login, mas o cofre está embrulhado com outra (redefinição incompleta).
+function showNeedRecovery(pw) {
+  authShell(`
+    <form class="auth-card" id="needrk-form">
+      <h2>Destravar dados</h2>
+      <p class="note">Sua senha foi alterada, mas os dados ainda estão protegidos pela anterior. Informe a <b>chave de recuperação</b> para destravá-los com a senha nova.</p>
+      <div class="form-list">
+        <label class="field col"><span>Chave de recuperação</span><input name="rk" class="mono" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" required></label>
+      </div>
+      <p class="auth-error" hidden></p>
+      <button type="submit" class="btn primary big full">Destravar</button>
+      <button type="button" class="link auth-link" data-f="out">Sair</button>
+    </form>`);
+  const form = $('#needrk-form');
+  $('[data-f=out]', form).addEventListener('click', () => logout());
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    busy(form, true, 'Verificando…');
+    try {
+      const vault = await db.getVault();
+      let raw;
+      try { raw = await unlockWithRecovery(vault, form.rk.value); }
+      catch { busy(form, false); formError(form, 'Chave de recuperação incorreta.'); return; }
+      await db.updateVault(await rewrapPassword(raw, pw));
+      await enterApp(await importDataKey(raw));
+    } catch (err) { busy(form, false); formError(form, err.message); }
+  });
+}
+
+function recoveryKeyHTML(rk, first) {
+  return `
+    <h2>${first ? 'Sua chave de recuperação' : 'Nova chave de recuperação'}</h2>
+    <p class="note">Ela é a <b>única forma</b> de recuperar seus dados se você esquecer a senha. Guarde no seu gerenciador de senhas (ou anote em papel). <b>Ela não será mostrada de novo.</b></p>
+    <div class="rk-box mono" id="rk-text">${esc(rk)}</div>
+    <button type="button" class="btn full" data-f="copy">Copiar chave</button>
+    <label class="rk-confirm"><input type="checkbox" id="rk-ok"> Guardei minha chave em um local seguro</label>`;
+}
+
+function wireRecoveryKey(root, rk, onDone) {
+  $('[data-f=copy]', root).addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(rk); toast('Chave copiada'); }
+    catch { toast('Selecione e copie o texto da chave', 'err'); }
+  });
+  const btn = $('[data-f=done]', root);
+  $('#rk-ok', root).addEventListener('change', (e) => { btn.disabled = !e.target.checked; });
+  btn.addEventListener('click', onDone);
+}
+
+function showRecoveryKey(rk, onDone, { first = false } = {}) {
+  authShell(`<div class="auth-card">${recoveryKeyHTML(rk, first)}<button type="button" class="btn primary big full" data-f="done" disabled>Continuar</button></div>`);
+  wireRecoveryKey($('.auth-card'), rk, onDone);
+}
+
+// Ajustes → trocar senha (pede a atual para reembrulhar a chave dos dados).
+function openChangePassword() {
+  openSheet(`
+    <div class="sheet-head"><button class="link" data-close>Cancelar</button><h2>Trocar senha</h2><span></span></div>
+    <form class="sheet-body" id="chpw-form">
+      <div class="form-list">
+        <label class="field"><span>Senha atual</span><input name="cur" type="password" autocomplete="current-password" required></label>
+        ${pwFields()}
+      </div>
+      <p class="auth-error" hidden></p>
+      <button type="submit" class="btn primary big full">Salvar nova senha</button>
+    </form>`, (el, close) => {
+    const form = $('#chpw-form', el);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const pw = form.pw.value;
+      const bad = checkNewPassword(pw, form.pw2.value);
+      if (bad) { formError(form, bad); return; }
+      busy(form, true, 'Salvando…');
+      try {
+        const vault = await db.getVault();
+        let raw;
+        try { raw = await unlockWithPassword(vault, form.cur.value); }
+        catch { busy(form, false); formError(form, 'Senha atual incorreta.'); return; }
+        await auth.setPassword(pw);
+        await db.updateVault(await rewrapPassword(raw, pw));
+        close();
+        toast('Senha alterada ✓');
+      } catch (err) { busy(form, false); formError(form, err.message); }
+    });
+  });
+}
+
+// Ajustes → gerar nova chave de recuperação (a anterior deixa de valer).
+function openNewRecovery() {
+  openSheet(`
+    <div class="sheet-head"><button class="link" data-close>Fechar</button><h2>Chave de recuperação</h2><span></span></div>
+    <form class="sheet-body" id="newrk-form">
+      <p class="note">Gera uma nova chave e invalida a anterior. Use se perdeu a chave antiga ou acha que alguém a viu.</p>
+      <div class="form-list"><label class="field"><span>Senha atual</span><input name="cur" type="password" autocomplete="current-password" required></label></div>
+      <p class="auth-error" hidden></p>
+      <button type="submit" class="btn primary big full">Gerar nova chave</button>
+    </form>`, (el, close) => {
+    const form = $('#newrk-form', el);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      busy(form, true, 'Gerando…');
+      try {
+        const vault = await db.getVault();
+        let raw;
+        try { raw = await unlockWithPassword(vault, form.cur.value); }
+        catch { busy(form, false); formError(form, 'Senha incorreta.'); return; }
+        const { recoveryKey, patch } = await rewrapRecovery(raw);
+        await db.updateVault(patch);
+        form.innerHTML = `${recoveryKeyHTML(recoveryKey, false)}<button type="button" class="btn primary big full" data-f="done" disabled>Concluir</button>`;
+        wireRecoveryKey(form, recoveryKey, close);
+      } catch (err) { busy(form, false); formError(form, err.message); }
+    });
+  });
+}
+
+async function boot() {
+  lock();
+  $('#view').innerHTML = '<div class="auth-wrap"><p class="note center">Carregando…</p></div>';
+  let redirect = null;
+  try { redirect = await auth.consumeRedirect(); }
+  catch (err) { redirect = { error: err.message }; }
+  if (redirect && redirect.error) { showLogin({ error: redirect.error }); return; }
+  if (!auth.session || !auth.session.user) { showLogin(); return; }
+  if (redirect && redirect.type === 'invite') { showSetPassword(); return; }
+  if (redirect && redirect.type === 'recovery') { showRecovery(); return; }
+  const key = await keystore.get(auth.session.user.id);
+  if (!key) { const email = auth.session.user.email; await auth.signOut(); showLogin({ email }); return; }
+  await enterApp(key);
+}
+
+// ---------------------------------------------------------------------------
 // Inicialização
 
 store.onChange(({ local }) => {
-  render();
-  if (local) sync.markDirty();
+  if (!document.body.classList.contains('locked')) render();
+  if (local) cloud.markDirty();
 });
-sync.onStatus(renderSyncBadge);
+cloud.onStatus(renderSyncBadge);
 
-render();
-sync.run();
-
-window.addEventListener('online', () => sync.run());
-window.addEventListener('offline', () => sync._set('offline', 'Sem internet'));
+window.addEventListener('online', () => cloud.run());
+window.addEventListener('offline', () => cloud._set('offline', 'Sem internet'));
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') sync.schedule(300);
+  if (document.visibilityState === 'visible') cloud.schedule(300);
 });
+setInterval(() => { if (document.visibilityState === 'visible') cloud.run(); }, 60000);
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
+
+boot();

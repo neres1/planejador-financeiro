@@ -1,8 +1,8 @@
 // Service worker: deixa o app abrir sem internet. Estratégia "rede primeiro":
 // online sempre pega a versão mais nova; offline usa a cópia em cache.
-// Chamadas à API do GitHub (outra origem) não passam por aqui.
+// Chamadas ao Supabase (outra origem) não passam por aqui.
 
-const CACHE = 'pf-v1';
+const CACHE = 'pf-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -12,7 +12,10 @@ const ASSETS = [
   './js/format.js',
   './js/store.js',
   './js/series.js',
-  './js/github.js',
+  './js/supa.js',
+  './js/cloud.js',
+  './js/crypto.js',
+  './js/keystore.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-180.png',

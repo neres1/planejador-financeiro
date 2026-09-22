@@ -2,7 +2,7 @@
 
 Organizador financeiro **pessoal** inspirado no Splitwise: em vez de dividir contas com outras pessoas, ele organiza as suas receitas e despesas, com **lançamentos recorrentes como eventos de agenda**, separação entre **despesas fixas e variáveis** e o **dia da cobrança** de cada conta.
 
-É um site estático (HTML + CSS + JavaScript, sem build), feito para rodar no **GitHub Pages** e ser instalado no **iPhone pelo Safari** como um app. Os dados ficam salvos num **repositório privado seu no GitHub**.
+É um site estático (HTML + CSS + JavaScript, sem build), hospedado no **GitHub Pages** e instalável no **iPhone pelo Safari** como um app. Os dados ficam no **Supabase**, com login próprio e **criptografia de ponta a ponta**.
 
 ## Funcionalidades
 
@@ -16,81 +16,40 @@ Organizador financeiro **pessoal** inspirado no Splitwise: em vez de dividir con
 - **Agenda**: calendário do mês com marcadores de receitas, despesas e contas atrasadas.
 - **Recorrentes**: todas as contas fixas, assinaturas, salário e parcelas, com a próxima data e o compromisso mensal estimado.
 - **Categorias** editáveis, agrupadas em *Despesas fixas*, *Despesas variáveis* e *Receitas*.
-- **Funciona offline** (service worker); as alterações são enviadas ao GitHub quando a internet voltar.
+- **Funciona offline** (service worker); as alterações são enviadas quando a internet voltar.
 - **Sincroniza entre aparelhos** (iPhone e computador): cada item guarda a data da última alteração e as versões são mescladas.
 - Backup: exportar/importar JSON.
 - Modo claro/escuro automático, áreas seguras do iPhone (notch / barra inferior), sem zoom indesejado nos campos.
 
-## Como publicar (uma vez só)
+## Contas, dados e privacidade
 
-Você vai usar **dois repositórios**:
+- **Login por e-mail e senha**, que fica salvo no aparelho até você tocar em **Sair**. Cada conta tem os próprios dados.
+- **Cadastro fechado**: contas são criadas só por convite, no painel do Supabase.
+- **Criptografia de ponta a ponta**: lançamentos e categorias são cifrados no aparelho (AES-256-GCM) antes de ir ao servidor; a chave de dados é protegida pela senha (PBKDF2, 310 mil iterações) e por uma **chave de recuperação**. O servidor só guarda texto ilegível — nem quem administra o banco consegue ler.
+- **Esqueci a senha**: link por e-mail + chave de recuperação. Sem a chave, os dados antigos não podem ser recuperados (é o preço da criptografia de ponta a ponta).
+- A cópia local (para funcionar offline) também é criptografada; a chave fica no IndexedDB do aparelho, marcada como não exportável.
 
-| Repositório | Visibilidade | Conteúdo |
-|---|---|---|
-| `planejador-financeiro` | público | o código do app (este projeto), publicado no GitHub Pages |
-| `planejador-financeiro-dados` | **privado** | só o arquivo `financas.json` com seus dados |
+### Infraestrutura
 
-> O GitHub Pages gratuito exige repositório público, por isso os dados ficam num repositório separado e privado.
+| Peça | Onde |
+|---|---|
+| Site (código) | GitHub Pages — `neres1/planejador-financeiro` (público, só código) |
+| Banco + login | Supabase, projeto `planejador-financeiro`, região São Paulo (`sa-east-1`) |
+| Esquema do banco | [`supabase/schema.sql`](supabase/schema.sql) — tabelas `vault` e `items`, RLS por usuário, função `push_items` |
 
-### 1. Enviar o app para o GitHub
+A URL do projeto e a chave *publishable* ficam em [`js/supa.js`](js/supa.js). Elas são públicas por design: sem login não dão acesso a nada (RLS + cadastro desligado). A chave *secret* nunca vai para o app.
 
-1. Crie em <https://github.com/new> um repositório **público** chamado `planejador-financeiro`, **sem** README.
-2. Nesta pasta, rode (troque `SEU-USUARIO`):
+### Convidar alguém (ou você mesmo)
 
-   ```bash
-   git remote add origin https://github.com/SEU-USUARIO/planejador-financeiro.git
-   git push -u origin main
-   ```
+Supabase → projeto → **Authentication → Users → Add user → Send invitation** com o e-mail. A pessoa recebe o link (em inglês, "You have been invited"), abre, cria a senha no app e guarda a chave de recuperação.
 
-3. No repositório: **Settings → Pages → Build and deployment → Deploy from a branch → `main` / `(root)` → Save**.
-4. Em ~1 minuto o app estará em `https://SEU-USUARIO.github.io/planejador-financeiro/`.
+### Instalar no iPhone
 
-### 2. Criar o repositório de dados
+1. Abra `https://neres1.github.io/planejador-financeiro/` no **Safari**.
+2. **Compartilhar** → **Adicionar à Tela de Início**.
+3. Abra pelo ícone e entre com e-mail e senha (o app instalado tem armazenamento próprio, separado do Safari).
 
-1. Crie em <https://github.com/new> um repositório **privado** chamado `planejador-financeiro-dados` (marque "Add a README file").
-2. O arquivo `financas.json` é criado automaticamente pelo app na primeira sincronização.
-
-### 3. Criar o token de acesso
-
-1. Acesse **Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token** (<https://github.com/settings/personal-access-tokens/new>).
-2. **Repository access**: *Only select repositories* → `planejador-financeiro-dados`.
-3. **Permissions → Repository permissions → Contents**: *Read and write*.
-4. Defina uma validade (ex.: 1 ano), gere e copie o token (`github_pat_…`).
-
-O token dá acesso **somente** ao repositório de dados. Ele fica guardado apenas no aparelho (no armazenamento local do navegador) e nunca é gravado no repositório.
-
-### 4. Conectar o app
-
-Abra o app → ícone de **Ajustes** (canto superior direito) → preencha usuário, `planejador-financeiro-dados`, branch `main`, arquivo `financas.json` e o token → **Salvar e conectar**.
-
-O ícone de nuvem no canto superior esquerdo mostra o estado: ✓ sincronizado, girando = enviando, ! = erro, riscado = offline/não conectado.
-
-### 5. Instalar no iPhone
-
-1. Abra `https://SEU-USUARIO.github.io/planejador-financeiro/` no **Safari**.
-2. Toque em **Compartilhar** → **Adicionar à Tela de Início**.
-3. Abra pelo ícone e conecte o GitHub em Ajustes **de novo** — no iOS, o app instalado na tela de início tem armazenamento próprio, separado do Safari.
-
-## Como os dados são salvos
-
-- Cada alteração é salva na hora no aparelho e, ~1,5 s depois, enviada ao GitHub como um commit (`Atualiza dados financeiros (iPhone)`), então você tem **histórico completo** de versões no repositório de dados.
-- Antes de enviar, o app baixa a versão do GitHub e mescla: para cada lançamento/categoria vence a alteração mais recente; exclusões são propagadas.
-- Valores são guardados em centavos (inteiros) para evitar erros de arredondamento.
-
-Formato resumido do `financas.json`:
-
-```json
-{
-  "schema": 1,
-  "categories": [{ "id": "cat-moradia", "name": "Moradia / Aluguel", "emoji": "🏠", "group": "fixo", "color": "#7c6cf2" }],
-  "entries": [{
-    "id": "…", "type": "despesa", "description": "Aluguel", "amount": 250000,
-    "categoryId": "cat-moradia", "date": "2026-10-05",
-    "recurrence": { "freq": "monthly", "interval": 1, "byMonthDay": 5, "end": { "type": "count", "count": 12 } },
-    "overrides": { "2026-10-05": { "paid": true }, "2026-12-05": { "amount": 270000 } }
-  }]
-}
-```
+> Observação: no plano gratuito, o Supabase pausa o projeto após ~7 dias sem nenhum acesso. Nada é perdido; basta reativar no painel.
 
 ## Desenvolvimento
 
@@ -100,7 +59,7 @@ Não há dependências. Para rodar localmente (módulos ES não funcionam via `f
 python -m http.server 8080
 ```
 
-e abra <http://localhost:8080>. Testes do motor de recorrência (Node 18+):
+e abra <http://localhost:8080>. Testes (recorrência e sincronização criptografada contra um Supabase simulado; Node 20+):
 
 ```bash
 npm test
@@ -114,8 +73,12 @@ css/app.css             estilos (iPhone, modo escuro, safe areas)
 js/app.js               interface: telas, formulários, folhas modais
 js/recurrence.js        motor de recorrência (puro, testado)
 js/series.js            editar/excluir "somente esta / próximas / todas"
-js/store.js             dados, persistência local e mesclagem
-js/github.js            leitura/gravação no GitHub e sincronização
+js/store.js             dados, cópia local criptografada e mesclagem
+js/crypto.js            criptografia de ponta a ponta (WebCrypto)
+js/supa.js              login e acesso ao Supabase (fetch, sem dependências)
+js/cloud.js             sincronização criptografada
+js/keystore.js          chave de dados guardada no IndexedDB
+supabase/schema.sql     tabelas e regras de acesso do banco
 sw.js                   service worker (offline)
 manifest.webmanifest    instalação como app
 icons/                  ícones (gerados por tools/make-icons.mjs)
