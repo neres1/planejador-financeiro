@@ -29,6 +29,7 @@ export function createEntry(id, vals) {
   const entry = {
     id,
     type: vals.type,
+    flow: vals.type === 'investimento' ? (vals.flow || 'aporte') : undefined,
     description: vals.description,
     amount: vals.amount,
     categoryId: vals.categoryId,
@@ -44,7 +45,7 @@ export function createEntry(id, vals) {
 export function isStructuralChange(entry, vals) {
   const cur = clone(entry.recurrence || { freq: 'none' });
   if (cur.end && cur.end.type === 'count') cur.end.count = formCount(entry);
-  return vals.type !== entry.type || JSON.stringify(normalizeRec(cur)) !== JSON.stringify(normalizeRec(vals.recurrence));
+  return vals.type !== entry.type || (vals.flow || 'aporte') !== (entry.flow || 'aporte') || JSON.stringify(normalizeRec(cur)) !== JSON.stringify(normalizeRec(vals.recurrence));
 }
 
 // Contagem mostrada no formulário: ocorrências desta série somadas às de séries anteriores.
@@ -69,6 +70,7 @@ export function updateSingle(entry, vals) {
   const next = {
     ...entry,
     type: vals.type,
+    flow: vals.type === 'investimento' ? (vals.flow || 'aporte') : undefined,
     description: vals.description,
     amount: vals.amount,
     categoryId: vals.categoryId,
@@ -111,6 +113,7 @@ export function applyAll(entry, occ, vals) {
   const next = {
     ...entry,
     type: vals.type,
+    flow: vals.type === 'investimento' ? (vals.flow || 'aporte') : undefined,
     description: vals.description,
     amount: vals.amount,
     categoryId: vals.categoryId,
@@ -145,6 +148,7 @@ export function applyFuture(entry, occ, vals, newId) {
   const tail = {
     id: newId,
     type: vals.type,
+    flow: vals.type === 'investimento' ? (vals.flow || 'aporte') : undefined,
     description: vals.description,
     amount: vals.amount,
     categoryId: vals.categoryId,

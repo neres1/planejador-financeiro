@@ -19,6 +19,7 @@ export const GROUPS = {
   fixo: { label: 'Despesas fixas', short: 'Fixo' },
   variavel: { label: 'Despesas variáveis', short: 'Variável' },
   receita: { label: 'Receitas', short: 'Receita' },
+  investimento: { label: 'Investimentos', short: 'Investimento' },
 };
 
 export function defaultCategories() {
@@ -45,6 +46,12 @@ export function defaultCategories() {
     cat('freela', 'Freelance / Extras', '💻', 'receita', '#29a383'),
     cat('investimentos', 'Rendimentos', '📈', 'receita', '#3e9b4f'),
     cat('outras-receitas', 'Outras receitas', '💰', 'receita', '#5bb98b'),
+    cat('inv-cdb', 'CDB', '🏦', 'investimento', '#f97316'),
+    cat('inv-cdi', 'Pós-fixado (CDI)', '📊', 'investimento', '#fb923c'),
+    cat('inv-caixinha', 'Caixinha / Cofrinho', '🐷', 'investimento', '#f59e0b'),
+    cat('inv-acoes', 'Ações', '💹', 'investimento', '#ea580c'),
+    cat('inv-fii', 'Fundos imobiliários (FII)', '🏢', 'investimento', '#fdba74'),
+    cat('inv-rendafixa', 'Renda fixa / Tesouro', '🧾', 'investimento', '#c2410c'),
   ];
 }
 

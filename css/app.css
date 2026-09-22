@@ -9,9 +9,11 @@
   --brand-ink: #0c9a7c;
   --brand-soft: #e3f8f2;
   --inc: #11a683;
-  --exp: #f0572a;
+  --exp: #e5484d;
+  --inv: #f97316;
+  --inv-soft: #fff1e6;
   --fixo: #7c6cf2;
-  --variavel: #ff9f43;
+  --variavel: #e93d82;
   --danger: #e5484d;
   --warn: #f5a524;
   --shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 4px 16px rgba(16, 24, 40, .05);
@@ -32,7 +34,9 @@
     --line: #2a2f36;
     --brand-soft: #0f2f28;
     --inc: #2fd3ad;
-    --exp: #ff7a4d;
+    --exp: #ff6369;
+    --inv: #fb923c;
+    --inv-soft: #3a2413;
     --shadow: none;
   }
 }
@@ -95,6 +99,7 @@ b { font-weight: 600; }
 .center { text-align: center; }
 .inc { color: var(--inc); }
 .exp { color: var(--exp); }
+.inv { color: var(--inv); }
 .grid-2 { display: grid; gap: 0 14px; }
 @media (min-width: 720px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
 
@@ -104,22 +109,24 @@ b { font-weight: 600; }
   background: linear-gradient(135deg, #1cc29f 0%, #0fa184 100%);
   box-shadow: 0 10px 30px -12px rgba(28, 194, 159, .6);
 }
-.hero.neg { background: linear-gradient(135deg, #ff7a45 0%, #e5484d 100%); box-shadow: 0 10px 30px -12px rgba(229, 72, 77, .55); }
+.hero.neg { background: linear-gradient(135deg, #f2555a 0%, #c8313a 100%); box-shadow: 0 10px 30px -12px rgba(229, 72, 77, .55); }
 .hero-label { font-size: 14px; opacity: .9; }
 .hero-value { font-size: 38px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; margin: 2px 0; }
 .hero-sub { font-size: 14px; opacity: .9; }
-.hero-split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
-.hero-cell { text-align: left; background: rgba(255, 255, 255, .16); border-radius: 14px; padding: 10px 12px; color: #fff; }
+.hero-split { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+.hero-cell { text-align: left; background: rgba(255, 255, 255, .16); border-radius: 14px; padding: 10px; color: #fff; min-width: 0; }
 .hero-cell:active { background: rgba(255, 255, 255, .26); }
 .hero-cell .lbl { display: flex; align-items: center; gap: 6px; font-size: 13px; opacity: .95; }
-.hero-cell b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.hero-cell b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hero-cell small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hero-cell small { font-size: 12px; opacity: .85; }
 .hero .dot { border: 2px solid rgba(255, 255, 255, .9); }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.inc { background: var(--inc); }
 .dot.exp { background: var(--exp); }
-.dot.late { background: var(--danger); }
+.dot.late { background: var(--danger); box-shadow: 0 0 0 1.5px var(--card); }
+.dot.inv { background: var(--inv); }
 .dot.fixo { background: var(--fixo); }
 .dot.variavel { background: var(--variavel); }
 
@@ -140,7 +147,8 @@ b { font-weight: 600; }
 .alert { margin: 4px 16px 6px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font-size: 14px; font-weight: 600; }
 .more { display: block; width: 100%; padding: 14px; text-align: center; color: var(--brand-ink); font-weight: 600; border-top: 1px solid var(--line); }
 .more:active { background: var(--card-2); }
-.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+@media (min-width: 560px) { .kpis:not(.two) { grid-template-columns: repeat(4, 1fr); } }
 .kpis div { background: var(--card-2); border-radius: 12px; padding: 10px; }
 .kpis small { display: block; color: var(--muted); font-size: 12px; }
 .kpis b { font-size: 15px; font-variant-numeric: tabular-nums; }
@@ -166,6 +174,7 @@ b { font-weight: 600; }
 .check svg { width: 14px; height: 14px; }
 .check.on.exp { background: var(--exp); border-color: var(--exp); color: #fff; }
 .check.on.inc { background: var(--inc); border-color: var(--inc); color: #fff; }
+.check.on.inv { background: var(--inv); border-color: var(--inv); color: #fff; }
 
 .pill { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: var(--card-2); color: var(--muted); display: inline-flex; align-items: center; }
 .pill.icon svg { width: 12px; height: 12px; }
@@ -215,6 +224,8 @@ b { font-weight: 600; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 16px; border-radius: 12px; background: var(--card-2); font-weight: 600; font-size: 15px; }
 .btn:active { filter: brightness(.95); }
 .btn.primary { background: var(--brand); color: #fff; }
+.btn.inv { background: var(--inv); color: #fff; }
+.invest-cta { background: linear-gradient(135deg, var(--inv-soft), var(--card)); }
 .btn.ghost { background: none; }
 .btn.danger { color: var(--danger); }
 .btn.full { width: 100%; margin-top: 10px; }
@@ -300,6 +311,14 @@ b { font-weight: 600; }
 
 .seg { display: grid; grid-template-columns: 1fr 1fr; background: var(--card-2); border-radius: 12px; padding: 3px; margin-bottom: 12px; }
 .seg.three { grid-template-columns: repeat(3, 1fr); }
+.seg.four { grid-template-columns: repeat(4, 1fr); }
+.seg.four button { font-size: 13px; }
+.type-seg .t-despesa.on { color: var(--exp); }
+.type-seg .t-receita.on { color: var(--inc); }
+.type-seg .t-investimento.on { color: var(--inv); }
+.flow-seg { margin-top: -4px; }
+.flow-seg button.on { color: var(--inv); }
+.entry-form:not([data-kind="investimento"]) .inv-only { display: none; }
 .seg button { min-height: 38px; border-radius: 9px; font-weight: 600; font-size: 15px; color: var(--muted); }
 .seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
 
@@ -308,6 +327,7 @@ b { font-weight: 600; }
 .amount input { width: 100%; max-width: 280px; border: 0; background: none; outline: none; font-size: 44px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .amount.despesa input { color: var(--exp); }
 .amount.receita input { color: var(--inc); }
+.amount.investimento input { color: var(--inv); }
 
 .wdays { display: flex; gap: 4px; }
 .wdays button { width: 32px; height: 32px; border-radius: 50%; background: var(--card-2); font-size: 13px; font-weight: 700; color: var(--muted); }

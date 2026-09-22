@@ -2,7 +2,7 @@
 // online sempre pega a versão mais nova; offline usa a cópia em cache.
 // Chamadas ao Supabase (outra origem) não passam por aqui.
 
-const CACHE = 'pf-v2';
+const CACHE = 'pf-v3';
 const ASSETS = [
   './',
   './index.html',

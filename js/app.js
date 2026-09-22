@@ -73,22 +73,36 @@ function occurrencesIn(from, to) {
 }
 
 const FALLBACK_CAT = { name: 'Sem categoria', emoji: '❔', color: '#8b8d98' };
-const catOf = (o) => store.category(o.categoryId) || { ...FALLBACK_CAT, group: o.type === 'receita' ? 'receita' : 'variavel' };
+const catOf = (o) => store.category(o.categoryId) || { ...FALLBACK_CAT, group: o.type === 'despesa' ? 'variavel' : o.type };
 function groupOf(o) {
-  if (o.type === 'receita') return 'receita';
+  if (o.type === 'receita' || o.type === 'investimento') return o.type;
   const c = store.category(o.categoryId);
-  return c && c.group !== 'receita' ? c.group : 'variavel';
+  return c && (c.group === 'fixo' || c.group === 'variavel') ? c.group : 'variavel';
 }
 
+// Efeito no caixa do mês: receitas e resgates entram; despesas e aportes saem.
+const cashSign = (o) => (o.type === 'receita' || (o.type === 'investimento' && o.flow === 'resgate') ? 1 : -1);
+// Cor de cada tipo: verde (receita), vermelho (despesa), laranja (investimento).
+const tone = (o) => (o.type === 'receita' ? 'inc' : o.type === 'investimento' ? 'inv' : 'exp');
+const amountSign = (o) => (o.type === 'investimento' ? (o.flow === 'resgate' ? '↙ ' : '↗ ') : o.type === 'receita' ? '+' : '−');
+const PAID_WORD = { despesa: 'pago', receita: 'recebido', investimento: 'realizado' };
+const PAID_LABEL = { despesa: 'Pago', receita: 'Recebido', investimento: 'Realizado' };
+const TYPE_LABEL = { despesa: 'Despesa', receita: 'Receita', investimento: 'Investimento' };
+
 function summarize(list) {
-  const s = { income: 0, incomePaid: 0, expense: 0, expensePaid: 0, fixo: 0, variavel: 0 };
+  const s = { income: 0, incomePaid: 0, expense: 0, expensePaid: 0, fixo: 0, variavel: 0, invest: 0, investPaid: 0, resgate: 0, resgatePaid: 0 };
   for (const o of list) {
     if (o.type === 'receita') { s.income += o.amount; if (o.paid) s.incomePaid += o.amount; }
-    else {
+    else if (o.type === 'investimento') {
+      if (o.flow === 'resgate') { s.resgate += o.amount; if (o.paid) s.resgatePaid += o.amount; }
+      else { s.invest += o.amount; if (o.paid) s.investPaid += o.amount; }
+    } else {
       s.expense += o.amount; if (o.paid) s.expensePaid += o.amount;
       s[groupOf(o)] += o.amount;
     }
   }
+  s.balance = s.income - s.expense - s.invest + s.resgate;
+  s.balancePaid = s.incomePaid - s.expensePaid - s.investPaid + s.resgatePaid;
   return s;
 }
 
@@ -129,17 +143,17 @@ function occRow(o, { showDate = true } = {}) {
     else if (o.date === t) badge = `<span class="badge today">Hoje</span>`;
   }
   const rec = o.total ? `<span class="pill">${o.n}/${o.total}</span>` : o.recurring ? `<span class="pill icon">${ICONS.repeat}</span>` : '';
-  const status = o.paid ? (exp ? 'pago' : 'recebido') : GROUPS[groupOf(o)].short;
+  const status = o.paid ? PAID_WORD[o.type] : o.type === 'investimento' ? (o.flow === 'resgate' ? 'Resgate' : 'Aporte') : GROUPS[groupOf(o)].short;
   return `
     <div class="item ${o.paid ? 'is-paid' : ''}" data-action="open-occ" data-key="${esc(o.key)}">
-      <button class="check ${exp ? 'exp' : 'inc'} ${o.paid ? 'on' : ''}" data-action="toggle-paid" data-key="${esc(o.key)}"
-        aria-label="${o.paid ? 'Desmarcar' : exp ? 'Marcar como pago' : 'Marcar como recebido'}">${ICONS.check}</button>
+      <button class="check ${tone(o)} ${o.paid ? 'on' : ''}" data-action="toggle-paid" data-key="${esc(o.key)}"
+        aria-label="${o.paid ? 'Desmarcar' : `Marcar como ${PAID_WORD[o.type]}`}">${ICONS.check}</button>
       <div class="tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
       <div class="item-main">
         <div class="item-title">${esc(o.description)}</div>
         <div class="item-sub">${showDate ? `${fmtShort(o.date)} · ` : ''}${esc(c.name)} ${rec} ${badge}</div>
       </div>
-      <div class="item-amount ${exp ? 'exp' : 'inc'}"><span class="amt">${exp ? '−' : '+'}${money(o.amount)}</span><small>${status}</small></div>
+      <div class="item-amount ${tone(o)}"><span class="amt">${amountSign(o)}${money(o.amount)}</span><small>${status}</small></div>
     </div>`;
 }
 
@@ -162,7 +176,7 @@ function renderHome() {
   if (!list.length) {
     return emptyState(`Nada em ${fmtMonth(ui.month).toLowerCase()}`, 'Adicione salário, contas fixas e gastos. Contas que se repetem aparecem sozinhas nos próximos meses.');
   }
-  const balance = s.income - s.expense;
+  const balance = s.balance;
   const toPay = list.filter((o) => o.type === 'despesa' && !o.paid);
   const toReceive = list.filter((o) => o.type === 'receita' && !o.paid);
   const overdue = toPay.filter((o) => o.date < t);
@@ -178,15 +192,18 @@ function renderHome() {
 
   return `
   <section class="hero ${balance >= 0 ? 'pos' : 'neg'}">
-    <div class="hero-label">Saldo previsto do mês</div>
+    <div class="hero-label">Saldo livre previsto do mês</div>
     <div class="hero-value">${balance < 0 ? '−' : ''}${money(Math.abs(balance))}</div>
-    <div class="hero-sub">Realizado até agora: ${money(s.incomePaid - s.expensePaid)}</div>
+    <div class="hero-sub">Realizado até agora: ${money(s.balancePaid)}</div>
     <div class="hero-split">
       <button class="hero-cell" data-action="filter-go" data-value="receita">
         <span class="lbl"><i class="dot inc"></i>Receitas</span><b>${money(s.income)}</b><small>${money(s.incomePaid)} recebido</small>
       </button>
       <button class="hero-cell" data-action="filter-go" data-value="despesa">
         <span class="lbl"><i class="dot exp"></i>Despesas</span><b>${money(s.expense)}</b><small>${money(s.expensePaid)} pago</small>
+      </button>
+      <button class="hero-cell" data-action="filter-go" data-value="investimento">
+        <span class="lbl"><i class="dot inv"></i>Investido</span><b>${money(s.invest - s.resgate)}</b><small>${money(s.investPaid)} aplicado</small>
       </button>
     </div>
   </section>
@@ -212,6 +229,8 @@ function renderHome() {
     </section>
   </div>
 
+  ${investCard(s)}
+
   <section class="card flush">
     <div class="card-head pad"><h2>A pagar ${toPay.length ? `<span class="count">${toPay.length}</span>` : ''}</h2>
       <span class="head-val exp">${money(toPay.reduce((a, o) => a + o.amount, 0))}</span></div>
@@ -226,8 +245,46 @@ function renderHome() {
   </section>` : ''}`;
 }
 
+// Carteira: total aportado (menos resgates) por categoria até o fim do mês exibido.
+function investCard(s) {
+  const invEntries = store.entries().filter((e) => e.type === 'investimento');
+  if (!invEntries.length) {
+    return `<section class="card invest-cta">
+      <div class="card-head"><h2>📈 Investimentos</h2></div>
+      <p class="note">Registre aportes e resgates em CDB, CDI, caixinhas, ações, FIIs e renda fixa — inclusive aportes mensais recorrentes.</p>
+      <button class="btn inv full" data-action="add-invest">Registrar investimento</button>
+    </section>`;
+  }
+  const to = monthRange(ui.month)[1];
+  const first = invEntries.reduce((m, e) => (e.date < m ? e.date : m), to);
+  const byCat = new Map();
+  let total = 0;
+  for (const e of invEntries) {
+    for (const o of expand(e, first, to)) {
+      const v = o.flow === 'resgate' ? -o.amount : o.amount;
+      byCat.set(o.categoryId, (byCat.get(o.categoryId) || 0) + v);
+      total += v;
+    }
+  }
+  const rows = [...byCat.entries()].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const max = rows.length ? rows[0][1] : 1;
+  return `<section class="card">
+    <div class="card-head"><h2>📈 Investimentos</h2><span class="head-val inv">${money(total)}</span></div>
+    <div class="kpis two">
+      <div><small>Aportes no mês</small><b class="inv">${money(s.invest)}</b></div>
+      <div><small>Resgates no mês</small><b class="inv">${money(s.resgate)}</b></div>
+    </div>
+    ${rows.length ? `<div class="bars" style="margin-top:14px">${rows.map(([id, v]) => {
+      const c = store.category(id) || FALLBACK_CAT;
+      return `<div class="bar-row"><span class="bar-name">${esc(c.emoji)} ${esc(c.name)}</span><span class="bar-val">${money(v)}</span>
+        <div class="bar"><span style="width:${Math.max(3, (v / max) * 100)}%;background:${esc(c.color)}"></span></div></div>`;
+    }).join('')}</div>` : ''}
+    <p class="note">Total aportado até ${fmtMonth(ui.month).toLowerCase()} (aportes − resgates, sem rendimentos).</p>
+  </section>`;
+}
+
 const FILTERS = [
-  ['all', 'Todos'], ['despesa', 'Despesas'], ['receita', 'Receitas'],
+  ['all', 'Todos'], ['despesa', 'Despesas'], ['receita', 'Receitas'], ['investimento', 'Investimentos'],
   ['fixo', 'Fixas'], ['variavel', 'Variáveis'], ['pendentes', 'Pendentes'], ['recorrentes', 'Recorrentes'],
 ];
 
@@ -235,7 +292,7 @@ function filterList(list) {
   const q = ui.search.trim().toLowerCase();
   return list.filter((o) => {
     switch (ui.filter) {
-      case 'despesa': case 'receita': if (o.type !== ui.filter) return false; break;
+      case 'despesa': case 'receita': case 'investimento': if (o.type !== ui.filter) return false; break;
       case 'fixo': case 'variavel': if (o.type !== 'despesa' || groupOf(o) !== ui.filter) return false; break;
       case 'pendentes': if (o.paid) return false; break;
       case 'recorrentes': if (!o.recurring) return false; break;
@@ -258,10 +315,10 @@ function listResults() {
   return `
     <div class="list-summary">
       <span>${list.length} ${list.length === 1 ? 'lançamento' : 'lançamentos'}</span>
-      <span><b class="inc">+${money(s.income)}</b> · <b class="exp">−${money(s.expense)}</b></span>
+      <span><b class="inc">+${money(s.income)}</b> · <b class="exp">−${money(s.expense)}</b>${s.invest || s.resgate ? ` · <b class="inv">↗ ${money(s.invest - s.resgate)}</b>` : ''}</span>
     </div>
     ${[...days.entries()].map(([d, items]) => {
-      const net = items.reduce((a, o) => a + (o.type === 'receita' ? o.amount : -o.amount), 0);
+      const net = items.reduce((a, o) => a + cashSign(o) * o.amount, 0);
       return `<div class="day-group">
         <div class="day-head ${d === todayISO() ? 'today' : ''}"><span>${fmtDayHeader(d)}${d === todayISO() ? ' · hoje' : ''}</span><span>${net < 0 ? '−' : '+'}${money(Math.abs(net))}</span></div>
         <div class="card flush">${items.map((o) => occRow(o, { showDate: false })).join('')}</div>
@@ -292,10 +349,11 @@ function renderCalendar() {
     const items = byDate.get(iso) || [];
     const exp = items.filter((o) => o.type === 'despesa').reduce((a, o) => a + o.amount, 0);
     const inc = items.some((o) => o.type === 'receita');
+    const inv = items.some((o) => o.type === 'investimento');
     const late = items.some((o) => !o.paid && o.date < t && o.type === 'despesa');
     cells += `<button class="cal-cell ${iso === t ? 'today' : ''} ${iso === ui.day ? 'sel' : ''}" data-action="day" data-date="${iso}">
       <span class="num">${d}</span>
-      <span class="dots">${inc ? '<i class="dot inc"></i>' : ''}${exp ? `<i class="dot ${late ? 'late' : 'exp'}"></i>` : ''}</span>
+      <span class="dots">${inc ? '<i class="dot inc"></i>' : ''}${exp ? `<i class="dot ${late ? 'late' : 'exp'}"></i>` : ''}${inv ? '<i class="dot inv"></i>' : ''}</span>
       ${exp ? `<span class="cal-amt">${moneyCompact(exp)}</span>` : ''}
     </button>`;
   }
@@ -304,7 +362,7 @@ function renderCalendar() {
     <section class="card cal">
       <div class="cal-grid head">${WD_LETTER.map((l) => `<div>${l}</div>`).join('')}</div>
       <div class="cal-grid">${cells}</div>
-      <div class="cal-legend"><span><i class="dot inc"></i>receita</span><span><i class="dot exp"></i>despesa</span><span><i class="dot late"></i>atrasada</span></div>
+      <div class="cal-legend"><span><i class="dot inc"></i>receita</span><span><i class="dot exp"></i>despesa</span><span><i class="dot inv"></i>investimento</span><span><i class="dot late"></i>atrasada</span></div>
     </section>
     <div class="day-head"><span>${fmtFull(ui.day)}</span>
       <button class="link" data-action="add-on-day" data-date="${ui.day}">+ Adicionar</button></div>
@@ -318,7 +376,7 @@ function renderRecurring() {
   if (!rec.length) {
     return emptyState('Nenhuma recorrência', 'Cadastre salário, aluguel, assinaturas e parcelas com repetição — como um evento de agenda — e escolha o dia da cobrança.');
   }
-  const groupOfEntry = (e) => (e.type === 'receita' ? 'receita' : (store.category(e.categoryId) || {}).group === 'fixo' ? 'fixo' : 'variavel');
+  const groupOfEntry = (e) => (e.type === 'receita' || e.type === 'investimento' ? e.type : (store.category(e.categoryId) || {}).group === 'fixo' ? 'fixo' : 'variavel');
   // Uma série dividida ("esta e as próximas") vira várias partes com o mesmo `seriesOf`:
   // mostra só a parte vigente (próxima ocorrência mais cedo) para não contar em dobro.
   const byRoot = new Map();
@@ -333,12 +391,11 @@ function renderRecurring() {
     if (live.length) active.push(live[0]);
     else ended.push(parts.sort((a, b) => (a.e.date < b.e.date ? 1 : -1))[0]);
   }
-  const sum = (g) => active.filter((x) => x.g === g).reduce((a, x) => a + monthlyEquivalent(x.e), 0);
-  const inc = sum('receita'), fix = sum('fixo'), vari = sum('variavel');
+  const sum = (g) => active.filter((x) => x.g === g).reduce((a, x) => a + monthlyEquivalent(x.e) * (x.e.flow === 'resgate' ? -1 : 1), 0);
+  const inc = sum('receita'), fix = sum('fixo'), vari = sum('variavel'), inv = sum('investimento');
 
   const row = ({ e, next }) => {
     const c = store.category(e.categoryId) || FALLBACK_CAT;
-    const exp = e.type === 'despesa';
     const total = displayTotal(e);
     return `<div class="item" data-action="open-entry" data-id="${esc(e.id)}">
       <div class="tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
@@ -347,7 +404,7 @@ function renderRecurring() {
         <div class="item-sub">${esc(describeRule(e))}</div>
         <div class="item-sub">${next ? `Próxima: ${fmtShort(next.date)}${total ? ` · parcela ${next.n + (e.ordinalOffset || 0)}/${total}` : ''}` : 'Encerrada'}</div>
       </div>
-      <div class="item-amount ${exp ? 'exp' : 'inc'}">${exp ? '−' : '+'}${money(e.amount)}</div>
+      <div class="item-amount ${tone(e)}">${amountSign(e)}${money(e.amount)}</div>
     </div>`;
   };
   const section = (g) => {
@@ -362,10 +419,11 @@ function renderRecurring() {
         <div><small>Receitas</small><b class="inc">${money(inc)}</b></div>
         <div><small>Fixas</small><b class="exp">${money(fix)}</b></div>
         <div><small>Variáveis</small><b class="exp">${money(vari)}</b></div>
+        <div><small>Investimentos</small><b class="inv">${money(inv)}</b></div>
       </div>
-      <p class="note">Sobra estimada das recorrências: <b>${money(inc - fix - vari)}</b>/mês${inc ? ` · fixas = ${Math.round((fix / inc) * 100)}% da renda` : ''}.</p>
+      <p class="note">Sobra estimada das recorrências: <b>${money(inc - fix - vari - inv)}</b>/mês${inc ? ` · fixas = ${Math.round((fix / inc) * 100)}% da renda` : ''}.</p>
     </section>
-    ${section('receita')}${section('fixo')}${section('variavel')}
+    ${section('receita')}${section('fixo')}${section('variavel')}${section('investimento')}
     ${ended.length ? `<button class="more" data-action="toggle-ended">${ui.showEnded ? 'Ocultar' : 'Mostrar'} encerradas (${ended.length})</button>
       ${ui.showEnded ? `<div class="card flush">${ended.map(row).join('')}</div>` : ''}` : ''}`;
 }
@@ -394,7 +452,7 @@ function renderSettings() {
       <p class="note">🔒 Seus lançamentos são criptografados neste aparelho antes de irem ao servidor. Nem o servidor consegue lê-los — por isso guarde bem sua <b>chave de recuperação</b>.</p>
     </section>
 
-    ${catGroup('fixo')}${catGroup('variavel')}${catGroup('receita')}
+    ${catGroup('fixo')}${catGroup('variavel')}${catGroup('receita')}${catGroup('investimento')}
 
     <div class="section-title">Backup</div>
     <section class="card">
@@ -556,31 +614,33 @@ function openOccurrence(key) {
   const entry = store.entry(o.entryId);
   if (!entry) return;
   const c = catOf(o);
-  const exp = o.type === 'despesa';
+  const typeLabel = o.type === 'despesa'
+    ? GROUPS[groupOf(o)].label.replace('Despesas ', 'Despesa ').replace('fixas', 'fixa').replace('variáveis', 'variável')
+    : o.type === 'investimento' ? `Investimento · ${o.flow === 'resgate' ? 'resgate' : 'aporte'}` : 'Receita';
   openSheet(`
-    <div class="sheet-head"><button class="link" data-close>Fechar</button><h2>${exp ? 'Despesa' : 'Receita'}</h2><button class="link strong" data-f="edit">Editar</button></div>
+    <div class="sheet-head"><button class="link" data-close>Fechar</button><h2>${TYPE_LABEL[o.type]}</h2><button class="link strong" data-f="edit">Editar</button></div>
     <div class="sheet-body">
       <div class="detail-top">
         <div class="tile big" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
         <div class="detail-title">${esc(o.description)}</div>
-        <div class="detail-amount ${exp ? 'exp' : 'inc'}">${money(o.amount)}</div>
+        <div class="detail-amount ${tone(o)}">${money(o.amount)}</div>
         <div class="detail-sub">${fmtFull(o.date)}</div>
       </div>
       <div class="info-list">
         <div><span>Categoria</span><b>${esc(c.emoji)} ${esc(c.name)}</b></div>
-        <div><span>Tipo</span><b>${exp ? GROUPS[groupOf(o)].label.replace('Despesas ', 'Despesa ').replace('fixas', 'fixa').replace('variáveis', 'variável') : 'Receita'}</b></div>
+        <div><span>Tipo</span><b>${typeLabel}</b></div>
         <div><span>Repetição</span><b>${esc(describeRule(entry))}</b></div>
         ${o.total ? `<div><span>Parcela</span><b>${o.n} de ${o.total}</b></div>` : ''}
         ${o.notes ? `<div class="notes"><span>Observações</span><p>${esc(o.notes)}</p></div>` : ''}
       </div>
-      <button class="btn big ${o.paid ? '' : 'primary'} full" data-f="paid">${o.paid ? (exp ? '✓ Pago — desmarcar' : '✓ Recebido — desmarcar') : exp ? 'Marcar como pago' : 'Marcar como recebido'}</button>
+      <button class="btn big ${o.paid ? '' : 'primary'} full" data-f="paid">${o.paid ? `✓ ${PAID_LABEL[o.type]} — desmarcar` : `Marcar como ${PAID_WORD[o.type]}`}</button>
       <button class="btn ghost danger full" data-f="delete">Excluir</button>
     </div>`, (el, close) => {
     el.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-f]');
       if (!b) return;
       if (b.dataset.f === 'edit') { close(); openEntryForm({ entry, occ: o }); }
-      if (b.dataset.f === 'paid') { store.saveEntries(togglePaid(entry, o)); close(); toast(o.paid ? 'Marcado como pendente' : exp ? 'Pago ✓' : 'Recebido ✓'); }
+      if (b.dataset.f === 'paid') { store.saveEntries(togglePaid(entry, o)); close(); toast(o.paid ? 'Marcado como pendente' : `${PAID_LABEL[o.type]} ✓`); }
       if (b.dataset.f === 'delete') { if (await deleteFlow(entry, o)) close(); }
     });
   });
@@ -609,18 +669,18 @@ async function deleteFlow(entry, occ) {
 
 function categoryOptions(type, selected) {
   const cats = store.categories();
-  const groups = type === 'receita' ? ['receita'] : ['fixo', 'variavel'];
+  const groups = type === 'despesa' ? ['fixo', 'variavel'] : [type];
   return groups.map((g) => `<optgroup label="${GROUPS[g].label}">${cats.filter((c) => c.group === g)
     .map((c) => `<option value="${esc(c.id)}" ${c.id === selected ? 'selected' : ''}>${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</optgroup>`).join('');
 }
 
-function openEntryForm({ entry = null, occ = null, date = null } = {}) {
+function openEntryForm({ entry = null, occ = null, date = null, type: startType = 'despesa' } = {}) {
   const t = todayISO();
   const v = occ
     ? { type: entry.type, amount: occ.amount, description: occ.description, categoryId: occ.categoryId, notes: occ.notes, date: occ.date, paid: occ.paid }
     : entry
       ? { type: entry.type, amount: entry.amount, description: entry.description, categoryId: entry.categoryId, notes: entry.notes || '', date: entry.date, paid: false }
-      : { type: 'despesa', amount: 0, description: '', categoryId: '', notes: '', date: date || (ui.month === currentYM() ? t : `${ui.month}-01`), paid: false };
+      : { type: startType, amount: 0, description: '', categoryId: '', notes: '', date: date || (ui.month === currentYM() ? t : `${ui.month}-01`), paid: false };
   if (!entry) v.paid = v.date <= t;
   const rec = JSON.parse(JSON.stringify((entry && entry.recurrence) || { freq: 'none' }));
   if (!rec.end) rec.end = { type: 'never' };
@@ -632,23 +692,27 @@ function openEntryForm({ entry = null, occ = null, date = null } = {}) {
   const title = !entry ? 'Novo lançamento' : seriesMode ? 'Editar série' : 'Editar lançamento';
 
   let type = v.type;
+  let flow = (entry && entry.flow) || 'aporte';
   let cents = v.amount;
   let touchedFreq = !!entry, touchedPaid = !!entry, touchedMday = !!entry;
 
   openSheet(`
     <div class="sheet-head"><button class="link" data-close>Cancelar</button><h2>${title}</h2><button class="link strong" data-f="save">Salvar</button></div>
     <div class="sheet-body">
-      <form class="entry-form" data-freq="${rec.freq}" data-end="${rec.end.type}" onsubmit="return false">
-        <div class="seg type-seg">
-          <button type="button" data-type="despesa" class="${type === 'despesa' ? 'on' : ''}">Despesa</button>
-          <button type="button" data-type="receita" class="${type === 'receita' ? 'on' : ''}">Receita</button>
+      <form class="entry-form" data-kind="${type}" data-freq="${rec.freq}" data-end="${rec.end.type}" onsubmit="return false">
+        <div class="seg three type-seg">
+          ${['despesa', 'receita', 'investimento'].map((k) => `<button type="button" data-type="${k}" class="t-${k} ${type === k ? 'on' : ''}">${TYPE_LABEL[k]}</button>`).join('')}
+        </div>
+        <div class="seg flow-seg inv-only">
+          <button type="button" data-flow="aporte" class="${flow === 'aporte' ? 'on' : ''}">↗ Aporte</button>
+          <button type="button" data-flow="resgate" class="${flow === 'resgate' ? 'on' : ''}">↙ Resgate</button>
         </div>
         <label class="amount ${type}"><span>R$</span><input id="f-amount" inputmode="numeric" pattern="[0-9]*" value="${cents ? digitsDisplay(cents) : ''}" placeholder="0,00" autocomplete="off"></label>
         <div class="form-list">
           <label class="field"><span>Descrição</span><input id="f-desc" value="${esc(v.description)}" placeholder="Ex.: Aluguel, Mercado…" autocomplete="off" enterkeyhint="done"></label>
           <label class="field"><span>Categoria</span><select id="f-cat">${categoryOptions(type, v.categoryId)}</select></label>
           <label class="field"><span id="f-date-lbl">${occ && occ.recurring ? 'Data desta ocorrência' : isRecurring({ recurrence: rec }) ? 'Começa em' : 'Data'}</span><input id="f-date" type="date" value="${v.date}" required></label>
-          ${seriesMode ? '' : `<label class="field switch-field"><span id="f-paid-lbl">${type === 'despesa' ? 'Pago' : 'Recebido'}${occ && occ.recurring ? ' (esta ocorrência)' : ''}</span><input id="f-paid" type="checkbox" class="switch" ${v.paid ? 'checked' : ''}></label>`}
+          ${seriesMode ? '' : `<label class="field switch-field"><span id="f-paid-lbl">${PAID_LABEL[type]}${occ && occ.recurring ? ' (esta ocorrência)' : ''}</span><input id="f-paid" type="checkbox" class="switch" ${v.paid ? 'checked' : ''}></label>`}
         </div>
 
         <div class="section-title">Repetição</div>
@@ -709,6 +773,7 @@ function openEntryForm({ entry = null, occ = null, date = null } = {}) {
       const c = store.category(f('cat').value);
       return {
         type,
+        flow: type === 'investimento' ? flow : undefined,
         amount: cents,
         description: f('desc').value.trim() || (c ? c.name : 'Sem descrição'),
         categoryId: f('cat').value,
@@ -754,16 +819,19 @@ function openEntryForm({ entry = null, occ = null, date = null } = {}) {
     if (!entry) setTimeout(() => amt.focus(), 320);
 
     el.addEventListener('click', async (e) => {
-      const tb = e.target.closest('[data-type]');
+      const tb = e.target.closest('.type-seg [data-type]');
       if (tb) {
         type = tb.dataset.type;
+        form.dataset.kind = type;
         $$('.type-seg button', el).forEach((b) => b.classList.toggle('on', b === tb));
         $('.amount', el).className = `amount ${type}`;
         f('cat').innerHTML = categoryOptions(type, '');
-        if (f('paid-lbl')) f('paid-lbl').textContent = (type === 'despesa' ? 'Pago' : 'Recebido') + (occ && occ.recurring ? ' (esta ocorrência)' : '');
+        if (f('paid-lbl')) f('paid-lbl').textContent = PAID_LABEL[type] + (occ && occ.recurring ? ' (esta ocorrência)' : '');
         suggestFromCategory();
         return;
       }
+      const fb = e.target.closest('[data-flow]');
+      if (fb) { flow = fb.dataset.flow; $$('.flow-seg button', el).forEach((b) => b.classList.toggle('on', b === fb)); return; }
       const wd = e.target.closest('[data-wd]');
       if (wd) { wd.classList.toggle('on'); sync_(); return; }
       const act = e.target.closest('[data-f]');
@@ -833,7 +901,7 @@ function openCategoryForm(cat = null, group = 'variavel') {
         <label class="field"><span>Emoji</span><input id="c-emoji" value="${esc(c.emoji)}" maxlength="8" autocomplete="off"></label>
       </div>
       <div class="section-title">Grupo</div>
-      <div class="seg three" id="c-group">${['fixo', 'variavel', 'receita'].map((g) => `<button type="button" data-g="${g}" class="${c.group === g ? 'on' : ''}">${GROUPS[g].short}</button>`).join('')}</div>
+      <div class="seg four" id="c-group">${['fixo', 'variavel', 'receita', 'investimento'].map((g) => `<button type="button" data-g="${g}" class="${c.group === g ? 'on' : ''}">${GROUPS[g].short}</button>`).join('')}</div>
       <p class="note">Fixas: contas que se repetem com valor previsível (aluguel, plano, assinaturas). Variáveis: gastos do dia a dia (mercado, lazer).</p>
       <div class="section-title">Cor</div>
       <div class="swatches">${COLORS.map((col) => `<button type="button" data-col="${col}" class="${col === c.color ? 'on' : ''}" style="--c:${col}" aria-label="${col}"></button>`).join('')}</div>
@@ -893,6 +961,7 @@ document.addEventListener('click', async (e) => {
     case 'month-today': ui.month = currentYM(); ui.day = null; render(); break;
     case 'add': openEntryForm(ui.tab === 'calendar' && ui.day ? { date: ui.day } : {}); break;
     case 'add-on-day': openEntryForm({ date: el.dataset.date }); break;
+    case 'add-invest': openEntryForm({ type: 'investimento' }); break;
     case 'toggle-paid': {
       e.stopPropagation();
       const o = occIndex.get(el.dataset.key);

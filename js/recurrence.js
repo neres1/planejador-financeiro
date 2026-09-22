@@ -151,6 +151,7 @@ export function expand(entry, from, to) {
       n: n + (entry.ordinalOffset || 0),
       total,
       type: entry.type,
+      flow: entry.type === 'investimento' ? (entry.flow || 'aporte') : undefined,
       description: o.description ?? entry.description,
       amount: o.amount ?? entry.amount,
       categoryId: o.categoryId ?? entry.categoryId,
