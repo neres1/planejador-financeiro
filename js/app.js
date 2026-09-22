@@ -12,6 +12,7 @@ import {
   togglePaid, isStructuralChange, formCount,
 } from './series.js';
 import { cloud } from './cloud.js';
+import { EMOJI_GROUPS } from './emoji.js';
 import { auth, db } from './supa.js';
 import { keystore } from './keystore.js';
 import {
@@ -196,16 +197,16 @@ function renderHome() {
     <div class="hero-label">Saldo livre previsto do mês</div>
     <div class="hero-value">${balance < 0 ? '−' : ''}${money(Math.abs(balance))}</div>
     <div class="hero-sub">Realizado até agora: ${money(s.balancePaid)}</div>
-    <div class="hero-split">
-      <button class="hero-cell" data-action="filter-go" data-value="receita">
-        <span class="lbl"><i class="dot inc"></i>Receitas</span><b>${money(s.income)}</b><small>${money(s.incomePaid)} recebido</small>
-      </button>
-      <button class="hero-cell" data-action="filter-go" data-value="despesa">
-        <span class="lbl"><i class="dot exp"></i>Despesas</span><b>${money(s.expense)}</b><small>${money(s.expensePaid)} pago</small>
-      </button>
-      <button class="hero-cell" data-action="filter-go" data-value="investimento">
-        <span class="lbl"><i class="dot inv"></i>Investido</span><b>${money(s.invest - s.resgate)}</b><small>${money(s.investPaid)} aplicado</small>
-      </button>
+    <div class="hero-pills">
+      ${[
+        ['receita', 'inc', 'Receitas', s.income, `${money(s.incomePaid)} recebido`],
+        ['despesa', 'exp', 'Despesas', s.expense, `${money(s.expensePaid)} pago`],
+        ['investimento', 'inv', 'Investido', s.invest - s.resgate, `${money(s.investPaid)} aplicado`],
+      ].map(([v, cls, name, total, sub]) => `
+        <button class="hero-pill" data-action="filter-go" data-value="${v}">
+          <span class="hp-name"><i class="dot ${cls}"></i>${name}</span>
+          <span class="hp-val"><b>${money(total)}</b><small>${sub}</small></span>
+        </button>`).join('')}
     </div>
   </section>
 
@@ -672,7 +673,7 @@ function categoryGrid(type, selected) {
   const cats = store.categories();
   const groups = type === 'despesa' ? ['fixo', 'variavel'] : [type];
   return groups.map((g) => `
-    ${groups.length > 1 ? `<div class="lbl">${GROUPS[g].label}</div>` : ''}
+    ${groups.length > 1 ? `<div class="flabel">${GROUPS[g].label}</div>` : ''}
     <div class="cat-grid">${cats.filter((c) => c.group === g).map((c) => `
       <button type="button" class="cat-tile ${c.id === selected ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}">
         <span class="cat-emoji">${esc(c.emoji)}</span><span class="cat-name">${esc(c.name)}</span></button>`).join('')}
@@ -733,27 +734,27 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
         </section>
 
         <section class="wiz-page" data-page="3">
-          <div class="lbl" id="f-date-lbl">${dateLabel()}</div>
+          <div class="flabel" id="f-date-lbl">${dateLabel()}</div>
           <div class="chip-row" id="f-quick">
             ${chip('quick', addDays(t, -1), 'Ontem', false)}${chip('quick', t, 'Hoje', false)}${chip('quick', addDays(t, 1), 'Amanhã', false)}
             <input id="f-date" type="date" class="date-chip" value="${v.date}" required>
           </div>
 
-          <div class="lbl">Repetir</div>
+          <div class="flabel">Repetir</div>
           <div class="chip-row">${FREQS.map(([k, l]) => chip('freq', k, l, freq === k)).join('')}</div>
 
           <div class="rec-only monthly-only">
-            <div class="lbl">Dia da cobrança</div>
+            <div class="flabel">Dia da cobrança</div>
             <div class="chip-row scroll" id="f-mday">${Array.from({ length: 31 }, (_, i) => chip('mday', i + 1, i + 1, mday === i + 1, 'num')).join('')}${chip('mday', -1, 'Último dia', mday === -1)}</div>
           </div>
           <div class="rec-only weekly-only">
-            <div class="lbl">Dias da semana</div>
+            <div class="flabel">Dias da semana</div>
             <div class="wdays">${WD_SHORT.map((d, i) => `<button type="button" data-wd="${i}" class="${wdays0.includes(i) ? 'on' : ''}" aria-label="${d}">${WD_LETTER[i]}</button>`).join('')}</div>
           </div>
           <div class="rec-only">
-            <div class="lbl">Intervalo</div>
+            <div class="flabel">Intervalo</div>
             <div class="stepper"><button type="button" data-interval="-1" aria-label="Menos">−</button><span>a cada <b id="f-interval">${interval}</b> <em id="f-unit"></em></span><button type="button" data-interval="1" aria-label="Mais">+</button></div>
-            <div class="lbl">Termina</div>
+            <div class="flabel">Termina</div>
             <div class="chip-row">${chip('end', 'never', 'Nunca', endType === 'never')}${chip('end', 'count', 'Após N vezes', endType === 'count')}${chip('end', 'until', 'Em uma data', endType === 'until')}</div>
             <div class="stepper end-count"><button type="button" data-count="-1" aria-label="Menos">−</button><input id="f-count" type="number" inputmode="numeric" min="1" max="600" value="${rec.end.count || 12}"><span>vezes</span><button type="button" data-count="1" aria-label="Mais">+</button></div>
             <div class="end-until"><input id="f-until" type="date" class="date-chip" value="${rec.end.until || addDays(v.date, 365)}"></div>
@@ -955,6 +956,68 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
 
 const COLORS = ['#1cc29f', '#30a46c', '#12a594', '#00a2c7', '#0090ff', '#3b9dff', '#6e56cf', '#7c6cf2', '#8e4ec6', '#d6409f', '#e93d82', '#e5484d', '#f76b15', '#f5a524', '#ffb224', '#ad7f58', '#8b8d98'];
 
+// Seletor de emojis no estilo do teclado do iPhone: grupos em sequência, abas embaixo,
+// "usados recentemente" e um campo que aceita qualquer emoji do teclado.
+const RECENT_KEY = 'pf:emoji-recent';
+const recentEmojis = () => { try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; } };
+function rememberEmoji(em) {
+  const list = [em, ...recentEmojis().filter((x) => x !== em)].slice(0, 32);
+  try { localStorage.setItem(RECENT_KEY, JSON.stringify(list)); } catch { /* nada */ }
+}
+// Primeiro "caractere visível" (um emoji pode ter vários códigos, ex.: 👨‍👩‍👧 ou 🏳️‍🌈).
+function firstGrapheme(str) {
+  const text = String(str || '').trim();
+  if (!text) return '';
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    for (const { segment } of new Intl.Segmenter('pt', { granularity: 'grapheme' }).segment(text)) return segment;
+  }
+  return Array.from(text)[0];
+}
+
+function emojiPicker(current) {
+  const recent = recentEmojis();
+  const groups = [...(recent.length ? [{ key: 'recentes', label: 'Usados recentemente', icon: '🕘', emojis: recent }] : []), ...EMOJI_GROUPS];
+  return `
+    <div class="emoji-picker">
+      <label class="ep-custom"><span>Outro emoji:</span><input id="c-emoji" value="${esc(current)}" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" aria-label="Digite ou cole um emoji"></label>
+      <div class="ep-grid" id="ep-grid">${groups.map((g) => `
+        <div class="ep-sec" data-sec="${g.key}"><div class="ep-title">${esc(g.label)}</div>
+          <div class="ep-list">${g.emojis.map((e) => `<button type="button" class="ep-e ${e === current ? 'on' : ''}" data-e="${e}">${e}</button>`).join('')}</div>
+        </div>`).join('')}
+      </div>
+      <div class="ep-tabs">${groups.map((g, i) => `<button type="button" class="${i === 0 ? 'on' : ''}" data-tab-e="${g.key}" aria-label="${esc(g.label)}">${g.icon}</button>`).join('')}</div>
+    </div>`;
+}
+
+function wireEmojiPicker(el, current, onPick) {
+  const grid = $('#ep-grid', el);
+  const input = $('#c-emoji', el);
+  const pick = (em) => {
+    if (!em) return;
+    $$('.ep-e.on', grid).forEach((b) => b.classList.remove('on'));
+    $$(`.ep-e[data-e="${CSS.escape(em)}"]`, grid).forEach((b) => b.classList.add('on'));
+    input.value = em;
+    onPick(em);
+  };
+  grid.addEventListener('click', (e) => { const b = e.target.closest('[data-e]'); if (b) pick(b.dataset.e); });
+  input.addEventListener('input', () => { const em = firstGrapheme(input.value); if (em) pick(em); });
+  input.addEventListener('focus', () => input.select());
+  const tabs = $$('[data-tab-e]', el);
+  const setTab = (key) => tabs.forEach((t) => t.classList.toggle('on', t.dataset.tabE === key));
+  tabs.forEach((t) => t.addEventListener('click', () => {
+    const sec = $(`[data-sec="${t.dataset.tabE}"]`, grid);
+    grid.scrollTop = sec.offsetTop;
+    setTab(t.dataset.tabE);
+  }));
+  // aba ativa acompanha a rolagem, como no teclado do iPhone
+  grid.addEventListener('scroll', () => {
+    const y = grid.scrollTop + 8;
+    let key = null;
+    for (const sec of $$('.ep-sec', grid)) if (sec.offsetTop <= y) key = sec.dataset.sec;
+    if (key) setTab(key);
+  }, { passive: true });
+}
+
 function openCategoryForm(cat = null, group = 'variavel') {
   const c = cat ? { ...cat } : { id: `cat-${uid()}`, name: '', emoji: '🏷️', group, color: COLORS[Math.floor(Math.random() * COLORS.length)] };
   const used = store.entries().filter((e) => e.categoryId === c.id).length;
@@ -964,17 +1027,18 @@ function openCategoryForm(cat = null, group = 'variavel') {
       <div class="cat-preview"><div class="tile big" id="c-tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div></div>
       <div class="form-list">
         <label class="field"><span>Nome</span><input id="c-name" value="${esc(c.name)}" placeholder="Ex.: Academia" autocomplete="off"></label>
-        <label class="field"><span>Emoji</span><input id="c-emoji" value="${esc(c.emoji)}" maxlength="8" autocomplete="off"></label>
       </div>
+      <div class="section-title">Emoji</div>
+      ${emojiPicker(c.emoji)}
       <div class="section-title">Grupo</div>
       <div class="seg four" id="c-group">${['fixo', 'variavel', 'receita', 'investimento'].map((g) => `<button type="button" data-g="${g}" class="${c.group === g ? 'on' : ''}">${GROUPS[g].short}</button>`).join('')}</div>
-      <p class="note">Fixas: contas que se repetem com valor previsível (aluguel, plano, assinaturas). Variáveis: gastos do dia a dia (mercado, lazer).</p>
+      <p class="note">Fixas: contas que se repetem com valor previsível (aluguel, plano, assinaturas). Variáveis: gastos do dia a dia (mercado, lazer). Investimentos: aportes e resgates.</p>
       <div class="section-title">Cor</div>
       <div class="swatches">${COLORS.map((col) => `<button type="button" data-col="${col}" class="${col === c.color ? 'on' : ''}" style="--c:${col}" aria-label="${col}"></button>`).join('')}</div>
       ${cat ? `<button class="btn ghost danger full" data-f="delete">Excluir categoria</button>${used ? `<p class="note center">${used} lançamento(s) usam esta categoria.</p>` : ''}` : ''}
     </div>`, (el, close) => {
     const tile = $('#c-tile', el);
-    $('#c-emoji', el).addEventListener('input', (e) => { tile.textContent = e.target.value || '🏷️'; });
+    wireEmojiPicker(el, c.emoji, (em) => { c.emoji = em; tile.textContent = em; });
     el.addEventListener('click', async (e) => {
       const g = e.target.closest('[data-g]');
       if (g) { c.group = g.dataset.g; $$('#c-group button', el).forEach((b) => b.classList.toggle('on', b === g)); return; }
@@ -984,8 +1048,9 @@ function openCategoryForm(cat = null, group = 'variavel') {
       if (!act) return;
       if (act.dataset.f === 'save') {
         c.name = $('#c-name', el).value.trim();
-        c.emoji = $('#c-emoji', el).value.trim() || '🏷️';
+        c.emoji = c.emoji || '🏷️';
         if (!c.name) { toast('Dê um nome à categoria', 'err'); return; }
+        rememberEmoji(c.emoji);
         store.saveCategory(c);
         close();
         toast('Categoria salva');

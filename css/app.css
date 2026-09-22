@@ -113,14 +113,21 @@ b { font-weight: 600; }
 .hero-label { font-size: 14px; opacity: .9; }
 .hero-value { font-size: 38px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; margin: 2px 0; }
 .hero-sub { font-size: 14px; opacity: .9; }
-.hero-split { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 16px; }
+.hero-pills { display: grid; gap: 8px; margin-top: 16px; }
+.hero-pill { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 10px 14px; border-radius: 16px; background: rgba(255, 255, 255, .18); color: #fff; text-align: left; }
+.hero-pill:active { background: rgba(255, 255, 255, .28); }
+.hp-name { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; }
+.hp-val { text-align: right; min-width: 0; }
+.hp-val b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hp-val small { display: block; font-size: 12px; opacity: .9; white-space: nowrap; }
+.hero .dot { width: 10px; height: 10px; border: 2px solid #fff; }
+@media (min-width: 720px) { .hero-pills { grid-template-columns: repeat(3, 1fr); } }
 .hero-cell { text-align: left; background: rgba(255, 255, 255, .16); border-radius: 14px; padding: 10px; color: #fff; min-width: 0; }
 .hero-cell:active { background: rgba(255, 255, 255, .26); }
 .hero-cell .lbl { display: flex; align-items: center; gap: 6px; font-size: 13px; opacity: .95; }
 .hero-cell b { display: block; font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hero-cell small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hero-cell small { font-size: 12px; opacity: .85; }
-.hero .dot { border: 2px solid rgba(255, 255, 255, .9); }
 
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.inc { background: var(--inc); }
@@ -413,8 +420,8 @@ body.locked .view { padding-bottom: calc(var(--safe-bottom) + 24px); }
 @keyframes wiz-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
 .wiz-foot { display: flex; gap: 10px; padding: 10px 16px; background: var(--card); border-top: 1px solid var(--line); }
 .wiz-foot .btn { flex: 1; min-height: 50px; font-size: 16px; }
-.lbl { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 16px 4px 8px; }
-.wiz .lbl:first-child { margin-top: 2px; }
+.flabel { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 16px 4px 8px; }
+.wiz .flabel:first-child { margin-top: 2px; }
 
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; align-items: center; }
 .chip-row.scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px 10px; padding: 2px 16px; -webkit-overflow-scrolling: touch; }
@@ -456,3 +463,18 @@ body.locked .view { padding-bottom: calc(var(--safe-bottom) + 24px); }
 .wiz .wdays { margin-bottom: 10px; }
 .wiz .wdays button { width: 40px; height: 40px; font-size: 14px; }
 .wiz .end-until { margin-bottom: 10px; }
+
+/* Seletor de emojis (estilo teclado do iPhone) */
+.emoji-picker { background: var(--card); border-radius: 14px; overflow: hidden; }
+.ep-custom { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+.ep-custom span { flex: none; }
+.ep-custom input { flex: 1; min-width: 0; border: 0; background: var(--card-2); border-radius: 10px; min-height: 38px; padding: 0 10px; font-size: 22px; outline: none; }
+.ep-grid { height: 264px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 0 6px 6px; position: relative; }
+.ep-title { position: sticky; top: 0; z-index: 1; background: var(--card); font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 10px 6px 6px; }
+.ep-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); }
+.ep-e { height: 42px; font-size: 28px; line-height: 1; border-radius: 10px; display: grid; place-items: center; }
+.ep-e:active, .ep-e.on { background: var(--brand-soft); }
+.ep-e.on { box-shadow: inset 0 0 0 2px var(--brand); }
+.ep-tabs { display: flex; justify-content: space-around; border-top: 1px solid var(--line); padding: 4px 4px calc(4px); background: var(--card-2); }
+.ep-tabs button { flex: 1; height: 38px; font-size: 20px; border-radius: 10px; filter: grayscale(1); opacity: .55; }
+.ep-tabs button.on { filter: none; opacity: 1; background: var(--card); }
