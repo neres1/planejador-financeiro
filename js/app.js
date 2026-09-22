@@ -367,6 +367,9 @@ function renderRecurring() {
 
 function renderSettings() {
   const cfg = loadConfig();
+  // No GitHub Pages (usuario.github.io) o dono do repositório já é conhecido.
+  if (!cfg.owner && location.hostname.endsWith('.github.io')) cfg.owner = location.hostname.split('.')[0];
+  if (!cfg.repo) cfg.repo = 'planejador-financeiro-dados';
   const cats = store.categories();
   const catGroup = (g) => `
     <div class="section-title">${GROUPS[g].label}</div>

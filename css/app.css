@@ -278,10 +278,11 @@ b { font-weight: 600; }
 .form-list > .field:first-child, .form-list > :first-child { border-top: 0; }
 .field > span:first-child { flex: none; color: var(--text); }
 .field input:not([type=checkbox]), .field select, .field textarea {
-  flex: 1; min-width: 0; border: 0; background: none; outline: none; text-align: right; color: var(--muted);
+  flex: 1; min-width: 0; border: 0; background: none; outline: none; text-align: right; color: var(--text);
   -webkit-appearance: none; appearance: none; min-height: 40px; padding: 0;
 }
-.field input:focus, .field select:focus, .field textarea:focus { color: var(--text); }
+.field input::placeholder, .field textarea::placeholder { color: var(--muted); opacity: .55; }
+.field select { color: var(--muted); }
 .field input[type=date] { display: flex; justify-content: flex-end; }
 .field input[type=date]::-webkit-date-and-time-value { text-align: right; }
 .field select { direction: rtl; text-align-last: right; }
