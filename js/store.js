@@ -2,6 +2,7 @@
 //
 // doc = { schema, updatedAt, categories: [...], entries: [...], cards: [...], invoices: [...] }
 // (cartões de crédito e faturas pagas: { id: 'inv-<cartão>-<AAAA-MM do vencimento>', paid })
+// alerts: [{ id: 'alert-…', cardId ('' = todos os cartões), amount (centavos), message, active }]
 // Cada item tem `id` e `updatedAt`; exclusões viram "lápides" { id, deleted: true, updatedAt }
 // para que a exclusão também se propague para os outros aparelhos.
 
@@ -56,15 +57,15 @@ export function defaultCategories() {
   ];
 }
 
-export const emptyDoc = () => ({ schema: 1, updatedAt: EPOCH, categories: defaultCategories(), entries: [], cards: [], invoices: [] });
+export const emptyDoc = () => ({ schema: 1, updatedAt: EPOCH, categories: defaultCategories(), entries: [], cards: [], invoices: [], alerts: [] });
 
 // Tipo de cada item (e a lista onde fica), pelo prefixo do id.
-export const LISTS = { category: 'categories', card: 'cards', invoice: 'invoices', entry: 'entries' };
-export const kindOf = (id) => (id.startsWith('cat-') ? 'category' : id.startsWith('card-') ? 'card' : id.startsWith('inv-') ? 'invoice' : 'entry');
+export const LISTS = { category: 'categories', card: 'cards', invoice: 'invoices', alert: 'alerts', entry: 'entries' };
+export const kindOf = (id) => (id.startsWith('cat-') ? 'category' : id.startsWith('card-') ? 'card' : id.startsWith('inv-') ? 'invoice' : id.startsWith('alert-') ? 'alert' : 'entry');
 
-// Documentos de versões anteriores não têm cartões nem faturas.
+// Documentos de versões anteriores não têm cartões, faturas nem alertas.
 function withLists(doc) {
-  return { ...doc, cards: doc.cards || [], invoices: doc.invoices || [] };
+  return { ...doc, cards: doc.cards || [], invoices: doc.invoices || [], alerts: doc.alerts || [] };
 }
 
 function mergeList(a = [], b = []) {
@@ -86,11 +87,12 @@ export function merge(a, b) {
     entries: mergeList(a.entries, b.entries),
     cards: mergeList(a.cards, b.cards),
     invoices: mergeList(a.invoices, b.invoices),
+    alerts: mergeList(a.alerts, b.alerts),
   };
 }
 
 // Representação canônica usada para saber se dois documentos têm o mesmo conteúdo.
-export const canon = (doc) => JSON.stringify([mergeList(doc.categories), mergeList(doc.entries), mergeList(doc.cards), mergeList(doc.invoices)]);
+export const canon = (doc) => JSON.stringify([mergeList(doc.categories), mergeList(doc.entries), mergeList(doc.cards), mergeList(doc.invoices), mergeList(doc.alerts)]);
 
 export function validateDoc(doc) {
   return doc && typeof doc === 'object' && Array.isArray(doc.entries) && Array.isArray(doc.categories);
@@ -182,6 +184,7 @@ export const store = {
   allCards() { return this.doc.cards.filter((c) => !c.deleted); },
   cards() { return this.allCards().filter((c) => !c.archived); },
   card(id) { return this.doc.cards.find((c) => c.id === id && !c.deleted) || null; },
+  alerts() { return this.doc.alerts.filter((a) => !a.deleted); },
   invoicePaid(id) { const x = this.doc.invoices.find((i) => i.id === id); return !!(x && !x.deleted && x.paid); },
 
   _upsert(list, items) {
@@ -205,12 +208,14 @@ export const store = {
   deleteCategory(id) { this._upsert('categories', [{ id, deleted: true }]); },
   saveCard(c) { this._upsert('cards', [c]); },
   deleteCard(id) { this._upsert('cards', [{ id, deleted: true }]); },
+  saveAlert(a) { this._upsert('alerts', [a]); },
+  deleteAlert(id) { this._upsert('alerts', [{ id, deleted: true }]); },
   setInvoicePaid(id, paid) { this._upsert('invoices', [{ id, paid: !!paid }]); },
 
   // Importa um backup JSON: tudo que for mais novo entra e é enviado ao servidor.
   importDoc(doc) {
     const merged = merge(this.doc, withLists(doc));
-    for (const x of [...merged.categories, ...merged.entries, ...merged.cards, ...merged.invoices]) {
+    for (const x of [...merged.categories, ...merged.entries, ...merged.cards, ...merged.invoices, ...merged.alerts]) {
       const cur = this.find(x.id);
       if (!cur || cur.item !== x) this.dirty.add(x.id);
     }

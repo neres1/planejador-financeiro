@@ -16,6 +16,7 @@ import { EMOJI_GROUPS } from './emoji.js';
 import {
   PAYMENTS, paymentOf, isCredit, closeDaysOf, DEFAULT_CLOSE_DAYS, invoiceId, invoiceOf, invoiceFor, invoiceForMonth,
   cardOccurrences, invoiceItems, cardUsed, splitInstallments, installmentRecurrence, normalizeInstallments,
+  triggeredAlerts,
 } from './cards.js';
 import { auth, db } from './supa.js';
 import { keystore } from './keystore.js';
@@ -581,6 +582,8 @@ function renderSettings() {
 
     ${cardsSettings()}
 
+    ${alertsSettings()}
+
     ${catGroup('fixo')}${catGroup('variavel')}${catGroup('receita')}${catGroup('investimento')}
 
     <div class="section-title">Backup</div>
@@ -619,6 +622,24 @@ function cardsSettings() {
     </div>
     ${archived.length ? `<button class="more" data-action="toggle-archived">${ui.showArchived ? 'Ocultar' : 'Mostrar'} arquivados (${archived.length})</button>
       ${ui.showArchived ? `<div class="card flush">${archived.map(row).join('')}</div>` : ''}` : ''}`;
+}
+
+function alertsSettings() {
+  const alerts = store.alerts();
+  return `
+    <div class="section-title">Alertas de gastos</div>
+    <div class="card flush">
+      ${alerts.map((a) => {
+        const card = a.cardId ? store.card(a.cardId) : null;
+        return `<div class="item ${a.active === false ? 'is-paid' : ''}" data-action="edit-alert" data-id="${esc(a.id)}">
+          <div class="tile" style="--c:var(--warn)">🔔</div>
+          <div class="item-main"><div class="item-title">${esc(a.message)}</div>
+            <div class="item-sub">Fatura em aberto ≥ ${money(a.amount)} · ${card ? `${esc(card.emoji)} ${esc(card.name)}` : 'todos os cartões'}${a.active === false ? ' · desativado' : ''}</div></div>
+          <span class="chev">${ICONS.right}</span></div>`;
+      }).join('')}
+      <button class="more" data-action="add-alert">+ Novo alerta</button>
+    </div>
+    <p class="note">O alerta aparece quando você escolhe <b>Crédito</b> num lançamento e a fatura em aberto já atingiu o valor. É só um lembrete: não impede o lançamento.</p>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -974,6 +995,7 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
               <div class="flabel">Parcelas</div>
               <div class="chip-row scroll" id="f-inst">${Array.from({ length: 24 }, (_, i) => chip('inst', i + 1, i ? `${i + 1}×` : 'À vista', inst === i + 1, i ? 'num' : '')).join('')}</div>
               <p class="preview" id="f-inv"></p>
+              <div id="f-alerts"></div>
             </div>
           </div>
 
@@ -1067,6 +1089,19 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
       };
     }
 
+    // alertas de gasto já atingidos na fatura em aberto (só lembrete, não bloqueia)
+    function alertBanner(vals) {
+      const box = f('alerts');
+      if (vals.payment !== 'credito' || !store.card(cardSel) || !vals.date) { box.innerHTML = ''; return; }
+      const hits = triggeredAlerts(store.alerts(), store.allCards(), store.entries(), cardSel, vals.date);
+      box.innerHTML = hits.map(({ alert: a, total }) => {
+        const card = a.cardId ? store.card(a.cardId) : null;
+        return `<div class="spend-alert" role="status"><span class="sa-icon">🔔</span><div>
+          <p>${esc(a.message)}</p>
+          <small>Fatura em aberto ${card ? `do ${esc(card.name)}` : 'de todos os cartões'}: <b>${money(total)}</b> · alerta em ${money(a.amount)}</small></div></div>`;
+      }).join('');
+    }
+
     // onde a compra no crédito vai cair
     function invPreview(vals) {
       const card = store.card(cardSel);
@@ -1094,6 +1129,7 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
       setOn('quick', f('date').value);
       const vals = collect();
       invPreview(vals);
+      alertBanner(vals);
       // novo lançamento: "pago" por padrão só se a primeira cobrança já passou
       if (!touchedPaid && !entry && f('paid') && vals.date) {
         const first = freq === 'none' ? vals.date : (firstOccurrence({ date: vals.date, recurrence: vals.recurrence }) || {}).date;
@@ -1423,6 +1459,51 @@ function openCardForm(card = null, onSaved = null) {
 }
 
 // ---------------------------------------------------------------------------
+// Alertas de gastos no crédito
+
+function openAlertForm(alert = null) {
+  const a = alert ? { ...alert } : { id: `alert-${uid()}`, cardId: '', amount: 0, message: '', active: true };
+  const cards = store.allCards().filter((c) => !c.archived || c.id === a.cardId);
+  openSheet(`
+    <div class="sheet-head"><button class="link" data-close>Cancelar</button><h2>${alert ? 'Editar alerta' : 'Novo alerta'}</h2><button class="link strong" data-f="save">Salvar</button></div>
+    <div class="sheet-body">
+      <div class="form-list">
+        <label class="field"><span>Quando a fatura em aberto atingir</span><input id="a-amount" inputmode="numeric" value="${digitsDisplay(a.amount || 0)}" autocomplete="off" class="money-input"></label>
+        <label class="field col"><span>Mensagem</span><textarea id="a-msg" rows="3" placeholder="Ex.: Já passou de R$ 2.000 no cartão. Precisa mesmo dessa compra?">${esc(a.message)}</textarea></label>
+      </div>
+      <div class="flabel">Cartão</div>
+      <div class="chip-row">${chip('acard', '', 'Todos os cartões', !a.cardId)}${cards.map((c) => chip('acard', c.id, `${esc(c.emoji)} ${esc(c.name)}`, a.cardId === c.id)).join('')}</div>
+      <p class="note">Com "Todos os cartões", vale a soma das faturas em aberto de todos eles.</p>
+      <div class="form-list" style="margin-top:14px">
+        <label class="field switch-field"><span>Ativo</span><input id="a-active" type="checkbox" class="switch" ${a.active !== false ? 'checked' : ''}></label>
+      </div>
+      ${alert ? '<button class="btn ghost danger full" data-f="delete">Excluir alerta</button>' : ''}
+    </div>`, (el, close) => {
+    const amount = $('#a-amount', el);
+    amount.addEventListener('input', () => { a.amount = centsFromDigits(amount.value); amount.value = digitsDisplay(a.amount); });
+    amount.addEventListener('focus', () => amount.select());
+    el.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.acard !== undefined) { a.cardId = b.dataset.acard; $$('[data-acard]', el).forEach((x) => x.classList.toggle('on', x === b)); return; }
+      if (b.dataset.f === 'save') {
+        a.message = $('#a-msg', el).value.trim();
+        a.active = $('#a-active', el).checked;
+        if (!a.amount) { toast('Informe o valor', 'err'); return; }
+        if (!a.message) { toast('Escreva a mensagem do alerta', 'err'); return; }
+        store.saveAlert(a);
+        close();
+        toast('Alerta salvo');
+      }
+      if (b.dataset.f === 'delete') {
+        const ok = await actionSheet('Excluir este alerta?', [{ label: 'Excluir alerta', value: true, style: 'destructive' }]);
+        if (ok) { store.deleteAlert(a.id); close(); toast('Alerta excluído'); }
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Ações globais
 
 function exportJSON() {
@@ -1472,6 +1553,8 @@ document.addEventListener('click', async (e) => {
     case 'add-card': openCardForm(); break;
     case 'edit-card': openCardForm(store.card(el.dataset.id)); break;
     case 'toggle-archived': ui.showArchived = !ui.showArchived; render(); break;
+    case 'add-alert': openAlertForm(); break;
+    case 'edit-alert': { const al = store.alerts().find((x) => x.id === el.dataset.id); if (al) openAlertForm(al); break; }
     case 'open-entry': { const en = store.entry(el.dataset.id); if (en) openEntryForm({ entry: en }); break; }
     case 'filter': ui.filter = el.dataset.value; saveUI(); render(); break;
     case 'filter-go': ui.filter = el.dataset.value; ui.tab = 'list'; saveUI(); render(); window.scrollTo(0, 0); break;

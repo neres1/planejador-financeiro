@@ -90,6 +90,26 @@ export function cardUsed(card, entries, isPaid, today) {
   return used;
 }
 
+// Valor da fatura em aberto de um cartão na data `date` (a fatura em que uma compra feita
+// nesse dia entraria).
+export function openInvoiceTotal(card, entries, date) {
+  return invoiceItems(card, entries, invoiceFor(card, date).dueYM).reduce((a, o) => a + o.amount, 0);
+}
+
+// Alertas de gasto que já foram atingidos para uma compra no cartão `cardId` na data `date`.
+// alert = { cardId ('' = todos os cartões somados), amount, message, active }
+export function triggeredAlerts(alerts, cards, entries, cardId, date) {
+  const out = [];
+  for (const a of alerts) {
+    if (a.deleted || a.active === false || !(a.amount > 0)) continue;
+    if (a.cardId && a.cardId !== cardId) continue;
+    const scope = a.cardId ? cards.filter((c) => c.id === a.cardId) : cards;
+    const total = scope.reduce((s, c) => s + openInvoiceTotal(c, entries, date), 0);
+    if (total >= a.amount) out.push({ alert: a, total });
+  }
+  return out;
+}
+
 // Divide o valor da compra em N parcelas; os centavos que sobram vão na primeira.
 export function splitInstallments(total, n) {
   const base = Math.floor(total / n);

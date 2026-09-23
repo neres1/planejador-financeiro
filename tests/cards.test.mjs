@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   invoiceOf, invoiceFor, invoiceForMonth, invoiceItems, cardUsed, splitInstallments,
-  installmentRecurrence, normalizeInstallments, paymentOf,
+  installmentRecurrence, normalizeInstallments, paymentOf, openInvoiceTotal, triggeredAlerts,
 } from '../js/cards.js';
 import { createEntry, applyAll, isStructuralChange } from '../js/series.js';
 import { merge, emptyDoc, kindOf } from '../js/store.js';
@@ -110,4 +110,20 @@ test('mesclagem inclui cartões e faturas; documentos antigos continuam válidos
   assert.equal(kindOf('inv-card-nu-2026-04'), 'invoice');
   assert.equal(kindOf('cat-x'), 'category');
   assert.equal(kindOf('m1abc23'), 'entry');
+});
+
+test('alertas: disparam quando a fatura em aberto já atingiu o valor', () => {
+  const itau = card({ id: 'card-it', dueDay: 20 });
+  const entries = [buy('a', '2026-03-10', 150000), buy('b', '2026-03-28', 90000), buy('c', '2026-03-15', 70000, { cardId: 'card-it' })]; // Itaú: fatura que fecha 13/04
+  assert.equal(openInvoiceTotal(card(), entries, '2026-03-20'), 150000); // fatura que fecha 27/03
+  assert.equal(openInvoiceTotal(card(), entries, '2026-03-28'), 90000); // já na fatura seguinte
+  const alerts = [
+    { id: 'alert-1', cardId: 'card-nu', amount: 150000, message: 'Nubank passou de 1.500' },
+    { id: 'alert-2', cardId: '', amount: 200000, message: 'Somando tudo, 2.000' },
+    { id: 'alert-3', cardId: 'card-nu', amount: 100, message: 'desativado', active: false },
+  ];
+  const msgs = (cardId, date) => triggeredAlerts(alerts, [card(), itau], entries, cardId, date).map((x) => x.alert.message);
+  assert.deepEqual(msgs('card-nu', '2026-03-20'), ['Nubank passou de 1.500', 'Somando tudo, 2.000']);
+  assert.deepEqual(msgs('card-it', '2026-03-20'), ['Somando tudo, 2.000']);
+  assert.deepEqual(msgs('card-nu', '2026-03-28'), []);
 });

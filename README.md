@@ -19,6 +19,7 @@ Organizador financeiro **pessoal** inspirado no Splitwise: em vez de dividir con
   - Cada cartão tem uma **fatura por mês**, que entra no saldo previsto no **vencimento**; marcar a fatura como paga devolve o valor ao limite.
   - **Parcelado em N×**: o limite desconta o total na compra e cada parcela cai numa fatura. Recorrências no crédito (assinaturas) caem cada uma no seu ciclo.
   - No Resumo: limite disponível e fatura do mês de cada cartão. Cartão com compras é arquivado em vez de excluído.
+- **Alertas de gastos** (Ajustes → Alertas de gastos): um valor, uma mensagem sua e o cartão (ou todos somados). Ao escolher **Crédito** num lançamento, se a fatura em aberto já atingiu o valor, a mensagem aparece no formulário — só como lembrete, sem impedir o lançamento.
 - **Agenda**: calendário do mês com marcadores de receitas, despesas e contas atrasadas.
 - **Recorrentes**: todas as contas fixas, assinaturas, salário e parcelas, com a próxima data e o compromisso mensal estimado.
 - **Categorias** editáveis, agrupadas em *Despesas fixas*, *Despesas variáveis* e *Receitas*.

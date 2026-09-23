@@ -499,3 +499,10 @@ body.locked .view { padding-bottom: calc(var(--safe-bottom) + 24px); }
 .inv-status.atrasada { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 .inv-nav { justify-content: center; margin-bottom: 8px; }
 .inv-items { margin-top: 12px; }
+
+/* Alertas de gastos */
+.spend-alert { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 10px; padding: 12px 14px; border-radius: 14px;
+  background: color-mix(in srgb, var(--warn) 16%, var(--card)); border: 1.5px solid color-mix(in srgb, var(--warn) 55%, transparent); }
+.spend-alert .sa-icon { font-size: 20px; line-height: 1.2; }
+.spend-alert p { margin: 0 0 4px; font-weight: 600; white-space: pre-wrap; }
+.spend-alert small { color: var(--muted); font-size: 13px; }
