@@ -1,6 +1,7 @@
 // Documento de dados + cópia local criptografada (por usuário) + mesclagem entre aparelhos.
 //
-// doc = { schema, updatedAt, categories: [...], entries: [...] }
+// doc = { schema, updatedAt, categories: [...], entries: [...], cards: [...], invoices: [...] }
+// (cartões de crédito e faturas pagas: { id: 'inv-<cartão>-<AAAA-MM do vencimento>', paid })
 // Cada item tem `id` e `updatedAt`; exclusões viram "lápides" { id, deleted: true, updatedAt }
 // para que a exclusão também se propague para os outros aparelhos.
 
@@ -55,7 +56,16 @@ export function defaultCategories() {
   ];
 }
 
-export const emptyDoc = () => ({ schema: 1, updatedAt: EPOCH, categories: defaultCategories(), entries: [] });
+export const emptyDoc = () => ({ schema: 1, updatedAt: EPOCH, categories: defaultCategories(), entries: [], cards: [], invoices: [] });
+
+// Tipo de cada item (e a lista onde fica), pelo prefixo do id.
+export const LISTS = { category: 'categories', card: 'cards', invoice: 'invoices', entry: 'entries' };
+export const kindOf = (id) => (id.startsWith('cat-') ? 'category' : id.startsWith('card-') ? 'card' : id.startsWith('inv-') ? 'invoice' : 'entry');
+
+// Documentos de versões anteriores não têm cartões nem faturas.
+function withLists(doc) {
+  return { ...doc, cards: doc.cards || [], invoices: doc.invoices || [] };
+}
 
 function mergeList(a = [], b = []) {
   const map = new Map();
@@ -74,11 +84,13 @@ export function merge(a, b) {
     updatedAt: (a.updatedAt || '') > (b.updatedAt || '') ? a.updatedAt : b.updatedAt,
     categories: mergeList(a.categories, b.categories),
     entries: mergeList(a.entries, b.entries),
+    cards: mergeList(a.cards, b.cards),
+    invoices: mergeList(a.invoices, b.invoices),
   };
 }
 
 // Representação canônica usada para saber se dois documentos têm o mesmo conteúdo.
-export const canon = (doc) => JSON.stringify([mergeList(doc.categories), mergeList(doc.entries)]);
+export const canon = (doc) => JSON.stringify([mergeList(doc.categories), mergeList(doc.entries), mergeList(doc.cards), mergeList(doc.invoices)]);
 
 export function validateDoc(doc) {
   return doc && typeof doc === 'object' && Array.isArray(doc.entries) && Array.isArray(doc.categories);
@@ -109,7 +121,7 @@ export const store = {
       if (blob) {
         const saved = await decryptJSON(key, blob);
         if (validateDoc(saved.doc)) {
-          this.doc = saved.doc;
+          this.doc = withLists(saved.doc);
           this.dirty = new Set(saved.dirty || []);
           this.cursor = saved.cursor || null;
         }
@@ -137,12 +149,11 @@ export const store = {
     return this._saving;
   },
 
-  // Item (lançamento ou categoria) pelo id, com o tipo.
+  // Item (lançamento, categoria, cartão ou fatura) pelo id, com o tipo.
   find(id) {
-    const c = this.doc.categories.find((x) => x.id === id);
-    if (c) return { kind: 'category', item: c };
-    const e = this.doc.entries.find((x) => x.id === id);
-    return e ? { kind: 'entry', item: e } : null;
+    const kind = kindOf(id);
+    const item = this.doc[LISTS[kind]].find((x) => x.id === id);
+    return item ? { kind, item } : null;
   },
 
   // Aplica itens vindos do servidor: vence a versão alterada por último.
@@ -151,7 +162,7 @@ export const store = {
     for (const r of items) {
       const cur = this.find(r.item.id);
       if (cur && (cur.item.updatedAt || '') >= (r.item.updatedAt || '')) continue;
-      const list = cur ? (cur.kind === 'category' ? 'categories' : 'entries') : (r.kind === 'category' ? 'categories' : 'entries');
+      const list = LISTS[kindOf(r.item.id)];
       const i = this.doc[list].findIndex((x) => x.id === r.item.id);
       if (i >= 0) this.doc[list][i] = r.item; else this.doc[list].push(r.item);
       this.dirty.delete(r.item.id);
@@ -168,6 +179,10 @@ export const store = {
   entries() { return this.doc.entries.filter((e) => !e.deleted); },
   category(id) { return this.doc.categories.find((c) => c.id === id && !c.deleted) || null; },
   entry(id) { return this.doc.entries.find((e) => e.id === id && !e.deleted) || null; },
+  allCards() { return this.doc.cards.filter((c) => !c.deleted); },
+  cards() { return this.allCards().filter((c) => !c.archived); },
+  card(id) { return this.doc.cards.find((c) => c.id === id && !c.deleted) || null; },
+  invoicePaid(id) { const x = this.doc.invoices.find((i) => i.id === id); return !!(x && !x.deleted && x.paid); },
 
   _upsert(list, items) {
     const stamp = nowStamp();
@@ -188,11 +203,14 @@ export const store = {
   deleteEntry(id) { this._upsert('entries', [{ id, deleted: true }]); },
   saveCategory(c) { this._upsert('categories', [c]); },
   deleteCategory(id) { this._upsert('categories', [{ id, deleted: true }]); },
+  saveCard(c) { this._upsert('cards', [c]); },
+  deleteCard(id) { this._upsert('cards', [{ id, deleted: true }]); },
+  setInvoicePaid(id, paid) { this._upsert('invoices', [{ id, paid: !!paid }]); },
 
   // Importa um backup JSON: tudo que for mais novo entra e é enviado ao servidor.
   importDoc(doc) {
-    const merged = merge(this.doc, doc);
-    for (const x of [...merged.categories, ...merged.entries]) {
+    const merged = merge(this.doc, withLists(doc));
+    for (const x of [...merged.categories, ...merged.entries, ...merged.cards, ...merged.invoices]) {
       const cur = this.find(x.id);
       if (!cur || cur.item !== x) this.dirty.add(x.id);
     }

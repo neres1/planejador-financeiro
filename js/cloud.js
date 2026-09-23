@@ -1,12 +1,11 @@
 // Sincronização com o Supabase: baixa o que mudou no servidor, aplica (vence o mais recente)
 // e envia o que mudou aqui. Tudo trafega e fica guardado criptografado.
 
-import { store, nowStamp } from './store.js';
+import { store, nowStamp, kindOf } from './store.js';
 import { db, auth, AuthError } from './supa.js';
 import { encryptJSON, decryptJSON } from './crypto.js';
 
 const iso = (t) => new Date(t).toISOString();
-const kindOf = (id) => (id.startsWith('cat-') ? 'category' : 'entry');
 const BATCH = 200;
 
 const listeners = new Set();

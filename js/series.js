@@ -8,6 +8,20 @@ const OCC_FIELDS = ['amount', 'description', 'categoryId', 'notes'];
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
+// Forma de pagamento (só despesas), cartão e parcelamento no crédito.
+function payFields(vals) {
+  const exp = vals.type === 'despesa';
+  const credit = exp && vals.payment === 'credito' && !!vals.cardId;
+  const inst = credit && vals.installments > 1;
+  return {
+    payment: exp ? (vals.payment || 'debito') : undefined,
+    cardId: credit ? vals.cardId : undefined,
+    installments: inst ? vals.installments : undefined,
+    totalAmount: inst ? vals.totalAmount : undefined,
+  };
+}
+const payKey = (x) => { const p = payFields(x); return `${p.payment}|${p.cardId}|${p.installments || 1}`; };
+
 function setPaidOnFirst(entry, paid) {
   const first = firstOccurrence(entry);
   if (!first) return entry;
@@ -34,6 +48,7 @@ export function createEntry(id, vals) {
     amount: vals.amount,
     categoryId: vals.categoryId,
     notes: vals.notes || '',
+    ...payFields(vals),
     date: vals.date,
     recurrence: clone(vals.recurrence),
     overrides: {},
@@ -45,7 +60,7 @@ export function createEntry(id, vals) {
 export function isStructuralChange(entry, vals) {
   const cur = clone(entry.recurrence || { freq: 'none' });
   if (cur.end && cur.end.type === 'count') cur.end.count = formCount(entry);
-  return vals.type !== entry.type || (vals.flow || 'aporte') !== (entry.flow || 'aporte') || JSON.stringify(normalizeRec(cur)) !== JSON.stringify(normalizeRec(vals.recurrence));
+  return vals.type !== entry.type || payKey(vals) !== payKey(entry) || (vals.flow || 'aporte') !== (entry.flow || 'aporte') || JSON.stringify(normalizeRec(cur)) !== JSON.stringify(normalizeRec(vals.recurrence));
 }
 
 // Contagem mostrada no formulário: ocorrências desta série somadas às de séries anteriores.
@@ -75,6 +90,7 @@ export function updateSingle(entry, vals) {
     amount: vals.amount,
     categoryId: vals.categoryId,
     notes: vals.notes || '',
+    ...payFields(vals),
     date: vals.date,
     recurrence: clone(vals.recurrence),
     overrides: {},
@@ -118,6 +134,7 @@ export function applyAll(entry, occ, vals) {
     amount: vals.amount,
     categoryId: vals.categoryId,
     notes: vals.notes || '',
+    ...payFields(vals),
     date: start,
     recurrence,
     overrides: ov,
@@ -153,6 +170,7 @@ export function applyFuture(entry, occ, vals, newId) {
     amount: vals.amount,
     categoryId: vals.categoryId,
     notes: vals.notes || '',
+    ...payFields(vals),
     date: vals.date,
     recurrence: withCount(vals.recurrence, tailOffset),
     overrides: ov,

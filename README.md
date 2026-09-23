@@ -13,6 +13,12 @@ Organizador financeiro **pessoal** inspirado no Splitwise: em vez de dividir con
   - **dia da cobrança** no mês (1–31 ou "último dia do mês"; dia 31 cai no último dia dos meses curtos);
   - termina **nunca**, **após N vezes** (parcelas, mostradas como "3/10") ou **numa data**;
   - ao editar ou excluir uma ocorrência: **somente esta**, **esta e as próximas** ou **todas**.
+- **Cartões de crédito** (Ajustes → Cartões de crédito): limite total, dia do vencimento e quantos dias antes dele a fatura fecha (padrão 7).
+  - Cada despesa tem forma de pagamento: **Débito, Pix, Dinheiro ou Crédito** (escolhendo o cartão). O último usado já vem marcado; despesas antigas contam como débito.
+  - A compra no crédito conta como gasto do **mês em que a fatura dela fecha** (ex.: vence 03/04 e fecha 27/03 → compras até 27/03 contam em março; depois, em abril).
+  - Cada cartão tem uma **fatura por mês**, que entra no saldo previsto no **vencimento**; marcar a fatura como paga devolve o valor ao limite.
+  - **Parcelado em N×**: o limite desconta o total na compra e cada parcela cai numa fatura. Recorrências no crédito (assinaturas) caem cada uma no seu ciclo.
+  - No Resumo: limite disponível e fatura do mês de cada cartão. Cartão com compras é arquivado em vez de excluído.
 - **Agenda**: calendário do mês com marcadores de receitas, despesas e contas atrasadas.
 - **Recorrentes**: todas as contas fixas, assinaturas, salário e parcelas, com a próxima data e o compromisso mensal estimado.
 - **Categorias** editáveis, agrupadas em *Despesas fixas*, *Despesas variáveis* e *Receitas*.
@@ -72,6 +78,7 @@ index.html              página única
 css/app.css             estilos (iPhone, modo escuro, safe areas)
 js/app.js               interface: telas, formulários, folhas modais
 js/recurrence.js        motor de recorrência (puro, testado)
+js/cards.js             cartões: ciclo da fatura, limite e parcelas (puro, testado)
 js/series.js            editar/excluir "somente esta / próximas / todas"
 js/store.js             dados, cópia local criptografada e mesclagem
 js/crypto.js            criptografia de ponta a ponta (WebCrypto)

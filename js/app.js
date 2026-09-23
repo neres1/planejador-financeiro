@@ -13,6 +13,10 @@ import {
 } from './series.js';
 import { cloud } from './cloud.js';
 import { EMOJI_GROUPS } from './emoji.js';
+import {
+  PAYMENTS, paymentOf, isCredit, closeDaysOf, DEFAULT_CLOSE_DAYS, invoiceId, invoiceOf, invoiceFor, invoiceForMonth,
+  cardOccurrences, invoiceItems, cardUsed, splitInstallments, installmentRecurrence, normalizeInstallments,
+} from './cards.js';
 import { auth, db } from './supa.js';
 import { keystore } from './keystore.js';
 import {
@@ -50,7 +54,7 @@ const ICONS = {
 
 const UI_KEY = 'pf:ui';
 const currentYM = () => todayISO().slice(0, 7);
-const ui = { tab: 'home', filter: 'all', search: '', showEnded: false };
+const ui = { tab: 'home', filter: 'all', search: '', showEnded: false, showArchived: false };
 try { Object.assign(ui, JSON.parse(localStorage.getItem(UI_KEY) || '{}')); } catch { /* nada */ }
 ui.month = currentYM();
 ui.day = null;
@@ -66,16 +70,53 @@ function monthRange(ym) {
   return [toISO(y, m, 1), toISO(y, m, daysInMonth(y, m))];
 }
 
-function occurrencesIn(from, to) {
+// Ocorrências em [from, to]. Compras no crédito ficam fora do caixa: entram pela fatura, que
+// aparece no vencimento. Com `ym`, cada compra no crédito conta no mês em que a fatura dela fecha
+// (Resumo e Lançamentos); sem `ym`, fica na data da compra (Agenda).
+function occurrencesIn(from, to, ym = null) {
   const list = [];
-  for (const e of store.entries()) list.push(...expand(e, from, to));
+  const cards = store.allCards();
+  const cardIds = new Set(cards.map((c) => c.id));
+  const entries = store.entries();
+  for (const e of entries) {
+    if (isCredit(e) && cardIds.has(e.cardId)) continue;
+    for (const o of expand(e, from, to)) { o.payment = paymentOf(e); list.push(o); }
+  }
+  const [fy, fm] = from.split('-').map(Number);
+  for (const card of cards) {
+    for (const o of cardOccurrences(card, entries, ym ? addDays(from, -62) : from, to)) {
+      if (ym && o.inv.ym !== ym) continue;
+      o.paid = store.invoicePaid(invoiceId(card.id, o.inv.dueYM));
+      list.push(o);
+    }
+    for (let k = 0; k <= 1; k++) {
+      const n = addMonths(fy, fm, k);
+      const inv = invoiceOf(card, `${n.y}-${String(n.m).padStart(2, '0')}`);
+      if (inv.due < from || inv.due > to) continue;
+      const row = invoiceRow(card, inv);
+      if (row) list.push(row);
+    }
+  }
   list.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.type === b.type ? b.amount - a.amount : a.type === 'receita' ? -1 : 1));
   for (const o of list) occIndex.set(o.key, o);
   return list;
 }
 
+// Fatura de um cartão como uma conta a pagar no vencimento (null se não tem compras).
+function invoiceRow(card, inv) {
+  const items = invoiceItems(card, store.entries(), inv.dueYM);
+  if (!items.length) return null;
+  return {
+    key: `inv:${card.id}:${inv.dueYM}`, isInvoice: true, type: 'despesa', payment: 'credito', cardId: card.id, inv,
+    date: inv.due, amount: items.reduce((a, o) => a + o.amount, 0), count: items.length,
+    description: `Fatura ${card.name}`, notes: '', paid: store.invoicePaid(invoiceId(card.id, inv.dueYM)),
+  };
+}
+
 const FALLBACK_CAT = { name: 'Sem categoria', emoji: '❔', color: '#8b8d98' };
-const catOf = (o) => store.category(o.categoryId) || { ...FALLBACK_CAT, group: o.type === 'despesa' ? 'variavel' : o.type };
+const FALLBACK_CARD = { name: 'Cartão', emoji: '💳', color: '#8b8d98' };
+const cardOf = (o) => store.card(o.cardId) || FALLBACK_CARD;
+const catOf = (o) => (o.isInvoice ? { ...cardOf(o), group: 'variavel' } : store.category(o.categoryId) || { ...FALLBACK_CAT, group: o.type === 'despesa' ? 'variavel' : o.type });
 function groupOf(o) {
   if (o.type === 'receita' || o.type === 'investimento') return o.type;
   const c = store.category(o.categoryId);
@@ -91,10 +132,14 @@ const PAID_WORD = { despesa: 'pago', receita: 'recebido', investimento: 'realiza
 const PAID_LABEL = { despesa: 'Pago', receita: 'Recebido', investimento: 'Realizado' };
 const TYPE_LABEL = { despesa: 'Despesa', receita: 'Receita', investimento: 'Investimento' };
 
+// Caixa: despesas à vista + faturas (no vencimento). Fixas/variáveis: gastos do mês, incluindo
+// as compras no crédito (no mês de fechamento da fatura).
 function summarize(list) {
-  const s = { income: 0, incomePaid: 0, expense: 0, expensePaid: 0, fixo: 0, variavel: 0, invest: 0, investPaid: 0, resgate: 0, resgatePaid: 0 };
+  const s = { income: 0, incomePaid: 0, expense: 0, expensePaid: 0, fixo: 0, variavel: 0, invest: 0, investPaid: 0, resgate: 0, resgatePaid: 0, credit: 0 };
   for (const o of list) {
     if (o.type === 'receita') { s.income += o.amount; if (o.paid) s.incomePaid += o.amount; }
+    else if (o.isInvoice) { s.expense += o.amount; if (o.paid) s.expensePaid += o.amount; }
+    else if (o.credit) { s.credit += o.amount; s[groupOf(o)] += o.amount; }
     else if (o.type === 'investimento') {
       if (o.flow === 'resgate') { s.resgate += o.amount; if (o.paid) s.resgatePaid += o.amount; }
       else { s.invest += o.amount; if (o.paid) s.investPaid += o.amount; }
@@ -135,10 +180,46 @@ function describeRule(entry) {
 // ---------------------------------------------------------------------------
 // Componentes
 
+const MON3 = (ym) => MONTHS[Number(ym.slice(5, 7)) - 1].slice(0, 3);
+
+function payTag(o) {
+  if (o.type !== 'despesa' || o.isInvoice) return '';
+  if (o.credit) return `<span class="pay">💳 ${esc(cardOf(o).name)}</span>`;
+  const p = PAYMENTS[o.payment || 'debito'];
+  return `<span class="pay" title="${p.label}">${p.icon}</span>`;
+}
+
 function occRow(o, { showDate = true } = {}) {
   const c = catOf(o);
   const t = todayISO();
   const exp = o.type === 'despesa';
+  if (o.isInvoice) {
+    const badge = o.paid ? '' : o.date < t ? '<span class="badge late">Atrasada</span>' : o.date === t ? '<span class="badge today">Hoje</span>' : '';
+    return `
+    <div class="item ${o.paid ? 'is-paid' : ''}" data-action="open-invoice" data-card="${esc(o.cardId)}" data-due="${o.inv.dueYM}">
+      <button class="check exp ${o.paid ? 'on' : ''}" data-action="toggle-paid" data-key="${esc(o.key)}"
+        aria-label="${o.paid ? 'Desmarcar' : 'Marcar fatura como paga'}">${ICONS.check}</button>
+      <div class="tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
+      <div class="item-main">
+        <div class="item-title">${esc(o.description)}</div>
+        <div class="item-sub">${showDate ? `${fmtShort(o.date)} · ` : ''}${o.count} ${o.count === 1 ? 'compra' : 'compras'} · gastos de ${MON3(o.inv.ym)} ${badge}</div>
+      </div>
+      <div class="item-amount exp"><span class="amt">−${money(o.amount)}</span><small>${o.paid ? 'paga' : 'Fatura'}</small></div>
+    </div>`;
+  }
+  if (o.credit) {
+    const rec = o.total ? `<span class="pill">${o.n}/${o.total}</span>` : o.recurring ? `<span class="pill icon">${ICONS.repeat}</span>` : '';
+    return `
+    <div class="item credit ${o.paid ? 'is-paid' : ''}" data-action="open-occ" data-key="${esc(o.key)}">
+      <span class="check card-mark" style="--c:${esc(cardOf(o).color)}" aria-hidden="true">💳</span>
+      <div class="tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
+      <div class="item-main">
+        <div class="item-title">${esc(o.description)}</div>
+        <div class="item-sub">${showDate ? `${fmtShort(o.date)} · ` : ''}${esc(c.name)} ${payTag(o)} ${rec}</div>
+      </div>
+      <div class="item-amount exp"><span class="amt">−${money(o.amount)}</span><small>fatura ${MON3(o.inv.ym)}${o.paid ? ' · paga' : ''}</small></div>
+    </div>`;
+  }
   let badge = '';
   if (!o.paid) {
     if (o.date < t) badge = `<span class="badge late">${exp ? 'Atrasada' : 'Pendente'}</span>`;
@@ -153,7 +234,7 @@ function occRow(o, { showDate = true } = {}) {
       <div class="tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
       <div class="item-main">
         <div class="item-title">${esc(o.description)}</div>
-        <div class="item-sub">${showDate ? `${fmtShort(o.date)} · ` : ''}${esc(c.name)} ${rec} ${badge}</div>
+        <div class="item-sub">${showDate ? `${fmtShort(o.date)} · ` : ''}${esc(c.name)} ${payTag(o)} ${rec} ${badge}</div>
       </div>
       <div class="item-amount ${tone(o)}"><span class="amt">${amountSign(o)}${money(o.amount)}</span><small>${status}</small></div>
     </div>`;
@@ -172,24 +253,25 @@ function emptyState(title, text, withButton = true) {
 
 function renderHome() {
   const [from, to] = monthRange(ui.month);
-  const list = occurrencesIn(from, to);
+  const list = occurrencesIn(from, to, ui.month);
   const s = summarize(list);
   const t = todayISO();
   if (!list.length) {
-    return emptyState(`Nada em ${fmtMonth(ui.month).toLowerCase()}`, 'Adicione salário, contas fixas e gastos. Contas que se repetem aparecem sozinhas nos próximos meses.');
+    return cardsCard() + emptyState(`Nada em ${fmtMonth(ui.month).toLowerCase()}`, 'Adicione salário, contas fixas e gastos. Contas que se repetem aparecem sozinhas nos próximos meses.');
   }
   const balance = s.balance;
-  const toPay = list.filter((o) => o.type === 'despesa' && !o.paid);
+  const toPay = list.filter((o) => o.type === 'despesa' && !o.paid && !o.credit);
   const toReceive = list.filter((o) => o.type === 'receita' && !o.paid);
   const overdue = toPay.filter((o) => o.date < t);
   const upcoming = toPay.slice(0, 6);
 
   const byCat = new Map();
-  for (const o of list) if (o.type === 'despesa') byCat.set(o.categoryId, (byCat.get(o.categoryId) || 0) + o.amount);
+  for (const o of list) if (o.type === 'despesa' && !o.isInvoice) byCat.set(o.categoryId, (byCat.get(o.categoryId) || 0) + o.amount);
   const cats = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
   const maxCat = cats.length ? cats[0][1] : 1;
 
-  const fixPct = s.expense ? Math.round((s.fixo / s.expense) * 100) : 0;
+  const spent = s.fixo + s.variavel;
+  const fixPct = spent ? Math.round((s.fixo / spent) * 100) : 0;
   const incomeUse = s.income ? Math.round((s.fixo / s.income) * 100) : null;
 
   return `
@@ -213,12 +295,13 @@ function renderHome() {
   <div class="grid-2">
     <section class="card">
       <div class="card-head"><h2>Fixas × variáveis</h2></div>
-      <div class="stack-bar"><span class="fixo" style="width:${fixPct}%"></span><span class="variavel" style="width:${s.expense ? 100 - fixPct : 0}%"></span></div>
+      <div class="stack-bar"><span class="fixo" style="width:${fixPct}%"></span><span class="variavel" style="width:${spent ? 100 - fixPct : 0}%"></span></div>
       <div class="legend">
         <button data-action="filter-go" data-value="fixo"><i class="dot fixo"></i>Fixas <b>${money(s.fixo)}</b></button>
         <button data-action="filter-go" data-value="variavel"><i class="dot variavel"></i>Variáveis <b>${money(s.variavel)}</b></button>
       </div>
       ${incomeUse != null ? `<p class="note">As despesas fixas comprometem <b>${incomeUse}%</b> das receitas do mês.</p>` : ''}
+      ${s.credit ? `<p class="note">Inclui <b>${money(s.credit)}</b> em compras no crédito deste mês; no saldo, elas entram pela fatura, no vencimento.</p>` : ''}
     </section>
 
     <section class="card">
@@ -230,6 +313,8 @@ function renderHome() {
       }).join('')}</div>` : '<p class="note">Nenhuma despesa neste mês.</p>'}
     </section>
   </div>
+
+  ${cardsCard()}
 
   ${investCard(s)}
 
@@ -245,6 +330,42 @@ function renderHome() {
     <div class="card-head pad"><h2>A receber</h2><span class="head-val inc">${money(toReceive.reduce((a, o) => a + o.amount, 0))}</span></div>
     ${toReceive.slice(0, 4).map((o) => occRow(o)).join('')}
   </section>` : ''}`;
+}
+
+// Cartões: limite disponível hoje e a fatura cujos gastos contam no mês exibido.
+function cardsCard() {
+  const cards = store.cards();
+  if (!cards.length) return '';
+  const t = todayISO();
+  const entries = store.entries();
+  return `<section class="card flush">
+    <div class="card-head pad"><h2>💳 Cartões de crédito</h2></div>
+    ${cards.map((card) => {
+      const used = cardUsed(card, entries, (due) => store.invoicePaid(invoiceId(card.id, due)), t);
+      const limit = card.limit || 0;
+      const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+      const inv = invoiceForMonth(card, ui.month);
+      const total = invoiceItems(card, entries, inv.dueYM).reduce((a, o) => a + o.amount, 0);
+      const st = invoiceStatus(card, inv);
+      return `<div class="card-row" data-action="open-invoice" data-card="${esc(card.id)}" data-due="${inv.dueYM}">
+        <div class="card-row-top">
+          <div class="tile" style="--c:${esc(card.color)}">${esc(card.emoji)}</div>
+          <div class="item-main"><div class="item-title">${esc(card.name)}</div>
+            <div class="item-sub">Disponível <b class="${limit - used < 0 ? 'exp' : ''}">${money(limit - used)}</b> de ${money(limit)}</div></div>
+          <span class="chev">${ICONS.right}</span>
+        </div>
+        <div class="bar limit"><span style="width:${pct}%;background:${esc(card.color)}"></span></div>
+        <div class="card-row-inv"><span>Fatura de ${MONTHS[Number(inv.ym.slice(5, 7)) - 1]} · vence ${fmtShort(inv.due)}</span>
+          <span><b>${money(total)}</b> <span class="inv-status ${st}">${st}</span></span></div>
+      </div>`;
+    }).join('')}
+  </section>`;
+}
+
+function invoiceStatus(card, inv) {
+  const t = todayISO();
+  if (store.invoicePaid(invoiceId(card.id, inv.dueYM))) return 'paga';
+  return t > inv.due ? 'atrasada' : t > inv.close ? 'fechada' : 'aberta';
 }
 
 // Carteira: total aportado (menos resgates) por categoria até o fim do mês exibido.
@@ -288,6 +409,7 @@ function investCard(s) {
 const FILTERS = [
   ['all', 'Todos'], ['despesa', 'Despesas'], ['receita', 'Receitas'], ['investimento', 'Investimentos'],
   ['fixo', 'Fixas'], ['variavel', 'Variáveis'], ['pendentes', 'Pendentes'], ['recorrentes', 'Recorrentes'],
+  ...Object.entries(PAYMENTS).map(([k, p]) => [k, `${p.icon} ${p.label}`]),
 ];
 
 function filterList(list) {
@@ -295,7 +417,9 @@ function filterList(list) {
   return list.filter((o) => {
     switch (ui.filter) {
       case 'despesa': case 'receita': case 'investimento': if (o.type !== ui.filter) return false; break;
-      case 'fixo': case 'variavel': if (o.type !== 'despesa' || groupOf(o) !== ui.filter) return false; break;
+      case 'fixo': case 'variavel': if (o.type !== 'despesa' || o.isInvoice || groupOf(o) !== ui.filter) return false; break;
+      case 'credito': if (o.payment !== 'credito') return false; break;
+      case 'debito': case 'pix': case 'dinheiro': if (o.type !== 'despesa' || o.payment !== ui.filter) return false; break;
       case 'pendentes': if (o.paid) return false; break;
       case 'recorrentes': if (!o.recurring) return false; break;
     }
@@ -309,7 +433,7 @@ function filterList(list) {
 
 function listResults() {
   const [from, to] = monthRange(ui.month);
-  const list = filterList(occurrencesIn(from, to));
+  const list = filterList(occurrencesIn(from, to, ui.month));
   if (!list.length) return emptyState('Nenhum lançamento', ui.search || ui.filter !== 'all' ? 'Nada corresponde ao filtro neste mês.' : 'Toque em + para adicionar o primeiro.', !ui.search && ui.filter === 'all');
   const s = summarize(list);
   const days = new Map();
@@ -317,10 +441,10 @@ function listResults() {
   return `
     <div class="list-summary">
       <span>${list.length} ${list.length === 1 ? 'lançamento' : 'lançamentos'}</span>
-      <span><b class="inc">+${money(s.income)}</b> · <b class="exp">−${money(s.expense)}</b>${s.invest || s.resgate ? ` · <b class="inv">↗ ${money(s.invest - s.resgate)}</b>` : ''}</span>
+      <span><b class="inc">+${money(s.income)}</b> · <b class="exp">−${money(s.expense)}</b>${s.credit ? ` · <b class="exp">💳 ${money(s.credit)}</b>` : ''}${s.invest || s.resgate ? ` · <b class="inv">↗ ${money(s.invest - s.resgate)}</b>` : ''}</span>
     </div>
     ${[...days.entries()].map(([d, items]) => {
-      const net = items.reduce((a, o) => a + cashSign(o) * o.amount, 0);
+      const net = items.reduce((a, o) => a + (o.credit ? 0 : cashSign(o) * o.amount), 0);
       return `<div class="day-group">
         <div class="day-head ${d === todayISO() ? 'today' : ''}"><span>${fmtDayHeader(d)}${d === todayISO() ? ' · hoje' : ''}</span><span>${net < 0 ? '−' : '+'}${money(Math.abs(net))}</span></div>
         <div class="card flush">${items.map((o) => occRow(o, { showDate: false })).join('')}</div>
@@ -349,13 +473,14 @@ function renderCalendar() {
   for (let d = 1; d <= dim; d++) {
     const iso = addDays(from, d - 1);
     const items = byDate.get(iso) || [];
-    const exp = items.filter((o) => o.type === 'despesa').reduce((a, o) => a + o.amount, 0);
+    const exp = items.filter((o) => o.type === 'despesa' && !o.credit).reduce((a, o) => a + o.amount, 0);
+    const credit = items.some((o) => o.credit);
     const inc = items.some((o) => o.type === 'receita');
     const inv = items.some((o) => o.type === 'investimento');
-    const late = items.some((o) => !o.paid && o.date < t && o.type === 'despesa');
+    const late = items.some((o) => !o.paid && o.date < t && o.type === 'despesa' && !o.credit);
     cells += `<button class="cal-cell ${iso === t ? 'today' : ''} ${iso === ui.day ? 'sel' : ''}" data-action="day" data-date="${iso}">
       <span class="num">${d}</span>
-      <span class="dots">${inc ? '<i class="dot inc"></i>' : ''}${exp ? `<i class="dot ${late ? 'late' : 'exp'}"></i>` : ''}${inv ? '<i class="dot inv"></i>' : ''}</span>
+      <span class="dots">${inc ? '<i class="dot inc"></i>' : ''}${exp || credit ? `<i class="dot ${late ? 'late' : 'exp'}"></i>` : ''}${inv ? '<i class="dot inv"></i>' : ''}</span>
       ${exp ? `<span class="cal-amt">${moneyCompact(exp)}</span>` : ''}
     </button>`;
   }
@@ -454,6 +579,8 @@ function renderSettings() {
       <p class="note">🔒 Seus lançamentos são criptografados neste aparelho antes de irem ao servidor. Nem o servidor consegue lê-los — por isso guarde bem sua <b>chave de recuperação</b>.</p>
     </section>
 
+    ${cardsSettings()}
+
     ${catGroup('fixo')}${catGroup('variavel')}${catGroup('receita')}${catGroup('investimento')}
 
     <div class="section-title">Backup</div>
@@ -474,6 +601,24 @@ function renderSettings() {
       </ol>
     </section>
     <p class="note center">Planejador Financeiro · dados em ${store.entries().length} lançamentos</p>`;
+}
+
+function cardsSettings() {
+  const all = store.allCards();
+  const active = all.filter((c) => !c.archived), archived = all.filter((c) => c.archived);
+  const row = (c) => `<div class="item" data-action="edit-card" data-id="${esc(c.id)}">
+    <div class="tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
+    <div class="item-main"><div class="item-title">${esc(c.name)}</div>
+      <div class="item-sub">Limite ${money(c.limit)} · vence dia ${c.dueDay} · fecha ${closeDaysOf(c)} dias antes</div></div>
+    <span class="chev">${ICONS.right}</span></div>`;
+  return `
+    <div class="section-title">Cartões de crédito</div>
+    <div class="card flush">
+      ${active.map(row).join('')}
+      <button class="more" data-action="add-card">+ Novo cartão</button>
+    </div>
+    ${archived.length ? `<button class="more" data-action="toggle-archived">${ui.showArchived ? 'Ocultar' : 'Mostrar'} arquivados (${archived.length})</button>
+      ${ui.showArchived ? `<div class="card flush">${archived.map(row).join('')}</div>` : ''}` : ''}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +758,7 @@ function toast(msg, kind = '') {
 function openOccurrence(key) {
   const o = occIndex.get(key);
   if (!o) return;
+  if (o.isInvoice) { openInvoice(o.cardId, o.inv.dueYM); return; }
   const entry = store.entry(o.entryId);
   if (!entry) return;
   const c = catOf(o);
@@ -632,18 +778,78 @@ function openOccurrence(key) {
         <div><span>Categoria</span><b>${esc(c.emoji)} ${esc(c.name)}</b></div>
         <div><span>Tipo</span><b>${typeLabel}</b></div>
         <div><span>Repetição</span><b>${esc(describeRule(entry))}</b></div>
-        ${o.total ? `<div><span>Parcela</span><b>${o.n} de ${o.total}</b></div>` : ''}
+        ${o.total ? `<div><span>Parcela</span><b>${o.n} de ${o.total}${entry.totalAmount ? ` · total ${money(entry.totalAmount)}` : ''}</b></div>` : ''}
+        ${o.type === 'despesa' ? `<div><span>Pagamento</span><b>${PAYMENTS[o.payment || 'debito'].icon} ${PAYMENTS[o.payment || 'debito'].label}${o.credit ? ` · ${esc(cardOf(o).name)}` : ''}</b></div>` : ''}
+        ${o.credit ? `<div><span>Fatura</span><b>${MONTHS[Number(o.inv.ym.slice(5, 7)) - 1]} · vence ${fmtShort(o.inv.due)}${o.paid ? ' · paga' : ''}</b></div>` : ''}
         ${o.notes ? `<div class="notes"><span>Observações</span><p>${esc(o.notes)}</p></div>` : ''}
       </div>
-      <button class="btn big ${o.paid ? '' : 'primary'} full" data-f="paid">${o.paid ? `✓ ${PAID_LABEL[o.type]} — desmarcar` : `Marcar como ${PAID_WORD[o.type]}`}</button>
+      ${o.credit ? '<button class="btn big full" data-f="invoice">Ver fatura</button>'
+        : `<button class="btn big ${o.paid ? '' : 'primary'} full" data-f="paid">${o.paid ? `✓ ${PAID_LABEL[o.type]} — desmarcar` : `Marcar como ${PAID_WORD[o.type]}`}</button>`}
       <button class="btn ghost danger full" data-f="delete">Excluir</button>
     </div>`, (el, close) => {
     el.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-f]');
       if (!b) return;
       if (b.dataset.f === 'edit') { close(); openEntryForm({ entry, occ: o }); }
+      if (b.dataset.f === 'invoice') { close(); openInvoice(o.cardId, o.inv.dueYM); }
       if (b.dataset.f === 'paid') { store.saveEntries(togglePaid(entry, o)); close(); toast(o.paid ? 'Marcado como pendente' : `${PAID_LABEL[o.type]} ✓`); }
       if (b.dataset.f === 'delete') { if (await deleteFlow(entry, o)) close(); }
+    });
+  });
+}
+
+// Fatura de um cartão: compras do ciclo, fechamento, vencimento e pagamento (valor total).
+function openInvoice(cardId, dueYM) {
+  const card = store.card(cardId);
+  if (!card) return;
+  let cur = dueYM;
+  const shift = (ym, k) => { const [y, m] = ym.split('-').map(Number); const n = addMonths(y, m, k); return `${n.y}-${String(n.m).padStart(2, '0')}`; };
+  const body = () => {
+    const inv = invoiceOf(card, cur);
+    const items = invoiceItems(card, store.entries(), cur).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const paid = store.invoicePaid(invoiceId(card.id, cur));
+    for (const o of items) o.paid = paid;
+    const total = items.reduce((a, o) => a + o.amount, 0);
+    const st = invoiceStatus(card, inv);
+    return `
+      <div class="month-nav inv-nav">
+        <button class="icon-btn" data-nav="-1" aria-label="Fatura anterior">${ICONS.left}</button>
+        <div class="month-label">Fatura de ${MONTHS[Number(inv.ym.slice(5, 7)) - 1]}<small>${inv.ym.slice(0, 4)}</small></div>
+        <button class="icon-btn" data-nav="1" aria-label="Próxima fatura">${ICONS.right}</button>
+      </div>
+      <div class="detail-top">
+        <div class="detail-amount exp">${money(total)}</div>
+        <div class="detail-sub"><span class="inv-status ${st}">${st}</span></div>
+      </div>
+      <div class="info-list">
+        <div><span>Fecha em</span><b>${fmtDateBR(inv.close)}</b></div>
+        <div><span>Vence em</span><b>${fmtDateBR(inv.due)}</b></div>
+        <div><span>Compras</span><b>${items.length}</b></div>
+      </div>
+      ${items.length ? `<button class="btn big ${paid ? '' : 'primary'} full" data-f="pay">${paid ? '✓ Fatura paga — desmarcar' : 'Marcar fatura como paga'}</button>` : ''}
+      ${items.length ? `<div class="card flush inv-items">${items.map((o) => occRow(o)).join('')}</div>` : '<p class="note center">Nenhuma compra nesta fatura.</p>'}`;
+  };
+  openSheet(`
+    <div class="sheet-head"><button class="link" data-close>Fechar</button><h2>${esc(card.emoji)} ${esc(card.name)}</h2><span></span></div>
+    <div class="sheet-body" id="inv-body">${body()}</div>`, (el, close) => {
+    const root = $('#inv-body', el);
+    el.addEventListener('click', (e) => {
+      const nav = e.target.closest('[data-nav]');
+      if (nav) { cur = shift(cur, +nav.dataset.nav); root.innerHTML = body(); return; }
+      const pay = e.target.closest('[data-f=pay]');
+      if (pay) {
+        const was = store.invoicePaid(invoiceId(card.id, cur));
+        store.setInvoicePaid(invoiceId(card.id, cur), !was);
+        toast(was ? 'Fatura marcada como pendente' : 'Fatura paga ✓');
+        root.innerHTML = body();
+        return;
+      }
+      const row = e.target.closest('[data-action=open-occ]');
+      if (row) {
+        const [entryId] = row.dataset.key.split('@');
+        const en = store.entry(entryId);
+        if (en) { close(); openEntryForm({ entry: en, occ: invoiceItems(card, store.entries(), cur).find((o) => o.key === row.dataset.key) }); }
+      }
     });
   });
 }
@@ -687,19 +893,38 @@ const STEPS = ['Valor', 'Categoria', 'Quando'];
 
 // Formulário em 3 passos (valor → categoria → quando), com teclado numérico,
 // grade de categorias e chips. Ao editar, dá para pular direto para qualquer passo.
+const LASTPAY_KEY = 'pf:last-pay';
+
 function openEntryForm({ entry = null, occ = null, date = null, type: startType = 'despesa' } = {}) {
   const t = todayISO();
+  // compra parcelada: edita sempre a compra inteira (valor total, data da compra)
+  if (entry && entry.installments > 1) occ = null;
   const v = occ
     ? { type: entry.type, amount: occ.amount, description: occ.description, categoryId: occ.categoryId, notes: occ.notes, date: occ.date, paid: occ.paid }
     : entry
       ? { type: entry.type, amount: entry.amount, description: entry.description, categoryId: entry.categoryId, notes: entry.notes || '', date: entry.date, paid: false }
       : { type: startType, amount: 0, description: '', categoryId: '', notes: '', date: date || (ui.month === currentYM() ? t : `${ui.month}-01`), paid: false };
   if (!entry) v.paid = v.date <= t;
+  if (entry && entry.installments > 1) v.amount = entry.totalAmount || entry.amount * entry.installments;
   const rec = JSON.parse(JSON.stringify((entry && entry.recurrence) || { freq: 'none' }));
   if (!rec.end) rec.end = { type: 'never' };
   if (entry && rec.end.type === 'count') rec.end.count = formCount(entry);
   const seriesMode = entry && isRecurring(entry) && !occ; // editando a série inteira (aba Recorrentes)
-  const title = !entry ? 'Novo lançamento' : seriesMode ? 'Editar série' : 'Editar lançamento';
+  const title = !entry ? 'Novo lançamento' : entry.installments > 1 ? 'Editar compra parcelada' : seriesMode ? 'Editar série' : 'Editar lançamento';
+
+  let lastPay = {};
+  try { lastPay = JSON.parse(localStorage.getItem(LASTPAY_KEY) || '{}'); } catch { /* nada */ }
+  const lastCard = store.card(lastPay.cardId);
+  let pay = entry && entry.type === 'despesa' ? paymentOf(entry) : PAYMENTS[lastPay.pay] ? lastPay.pay : 'debito';
+  let cardSel = (entry && entry.cardId) || (lastCard && !lastCard.archived ? lastCard.id : '') || (store.cards()[0] || {}).id || '';
+  let inst = (entry && entry.installments) || 1;
+  const cardChips = () => {
+    const list = store.cards();
+    const cur = store.card(cardSel);
+    if (cur && cur.archived) list.push(cur);
+    return list.map((c) => chip('card', c.id, `${esc(c.emoji)} ${esc(c.name)}`, c.id === cardSel)).join('')
+      + `<button type="button" class="chip-opt" data-newcard="1">+ ${list.length ? 'Novo' : 'Cadastrar cartão'}</button>`;
+  };
 
   let type = v.type;
   let flow = (entry && entry.flow) || 'aporte';
@@ -740,6 +965,19 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
             <input id="f-date" type="date" class="date-chip" value="${v.date}" required>
           </div>
 
+          <div class="exp-only">
+            <div class="flabel">Pagamento</div>
+            <div class="chip-row">${Object.entries(PAYMENTS).map(([k, p]) => chip('pay', k, `${p.icon} ${p.label}`, pay === k)).join('')}</div>
+            <div class="credit-only">
+              <div class="flabel">Cartão</div>
+              <div class="chip-row" id="f-cardlist">${cardChips()}</div>
+              <div class="flabel">Parcelas</div>
+              <div class="chip-row scroll" id="f-inst">${Array.from({ length: 24 }, (_, i) => chip('inst', i + 1, i ? `${i + 1}×` : 'À vista', inst === i + 1, i ? 'num' : '')).join('')}</div>
+              <p class="preview" id="f-inv"></p>
+            </div>
+          </div>
+
+          <div class="repeat-block">
           <div class="flabel">Repetir</div>
           <div class="chip-row">${FREQS.map(([k, l]) => chip('freq', k, l, freq === k)).join('')}</div>
 
@@ -760,9 +998,10 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
             <div class="end-until"><input id="f-until" type="date" class="date-chip" value="${rec.end.until || addDays(v.date, 365)}"></div>
             <p class="preview" id="f-preview"></p>
           </div>
+          </div>
 
           <div class="form-list" style="margin-top:14px">
-            ${seriesMode ? '' : `<label class="field switch-field"><span id="f-paid-lbl">${PAID_LABEL[type]}${occ && occ.recurring ? ' (esta ocorrência)' : ''}</span><input id="f-paid" type="checkbox" class="switch" ${v.paid ? 'checked' : ''}></label>`}
+            ${seriesMode ? '' : `<label class="field switch-field paid-field"><span id="f-paid-lbl">${PAID_LABEL[type]}${occ && occ.recurring ? ' (esta ocorrência)' : ''}</span><input id="f-paid" type="checkbox" class="switch" ${v.paid ? 'checked' : ''}></label>`}
             <label class="field col"><span>Observações</span><textarea id="f-notes" rows="2" placeholder="Opcional">${esc(v.notes)}</textarea></label>
           </div>
           ${entry ? '<button type="button" class="btn ghost danger full" data-f="delete">Excluir</button>' : ''}
@@ -806,20 +1045,47 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
         if (freq === 'weekly') recurrence.byWeekday = $$('.wdays .on', el).map((b) => +b.dataset.wd);
       }
       const c = store.category(catId);
+      const exp = type === 'despesa';
+      const credit = exp && pay === 'credito';
+      const n = credit ? inst : 1;
+      const dt = f('date').value;
+      if (n > 1 && dt) recurrence = installmentRecurrence(dt, n);
       return {
         type,
         flow: type === 'investimento' ? flow : undefined,
-        amount: cents,
+        amount: n > 1 ? splitInstallments(cents, n).base : cents,
         description: f('desc').value.trim() || (c ? c.name : 'Sem descrição'),
         categoryId: catId,
-        date: f('date').value,
-        paid: f('paid') ? f('paid').checked : false,
+        date: dt,
+        paid: credit ? false : f('paid') ? f('paid').checked : false,
         notes: f('notes').value.trim(),
         recurrence,
+        payment: exp ? pay : undefined,
+        cardId: credit ? cardSel : undefined,
+        installments: n > 1 ? n : undefined,
+        totalAmount: n > 1 ? cents : undefined,
       };
     }
 
+    // onde a compra no crédito vai cair
+    function invPreview(vals) {
+      const card = store.card(cardSel);
+      if (vals.payment !== 'credito' || !card || !vals.date) { f('inv').innerHTML = ''; return; }
+      const inv = invoiceFor(card, vals.date);
+      const mon = (ym) => MONTHS[Number(ym.slice(5, 7)) - 1];
+      let txt = `Entra na fatura de <b>${mon(inv.ym)}</b>, que fecha em ${fmtShort(inv.close)} e vence em <b>${fmtShort(inv.due)}</b>.`;
+      if (vals.installments > 1) {
+        const { base, first } = splitInstallments(vals.totalAmount, vals.installments);
+        let lastInv = inv;
+        for (const o of iterate({ date: vals.date, recurrence: vals.recurrence })) lastInv = invoiceFor(card, o.date);
+        txt = `${vals.installments}× de <b>${money(base)}</b>${first !== base ? ` (1ª de ${money(first)})` : ''}, uma em cada fatura, de ${mon(inv.ym)} a ${mon(lastInv.ym)}/${lastInv.ym.slice(0, 4)}. O limite desconta ${money(vals.totalAmount)} na hora. ` + txt.replace('Entra', 'A 1ª entra');
+      }
+      f('inv').innerHTML = txt;
+    }
+
     function sync_() {
+      form.dataset.paymode = type === 'despesa' ? pay : '';
+      form.dataset.instmode = type === 'despesa' && pay === 'credito' && inst > 1 ? 'multi' : '1';
       form.dataset.freq = freq;
       form.dataset.end = endType;
       f('interval').textContent = interval;
@@ -827,6 +1093,7 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
       f('date-lbl').textContent = dateLabel();
       setOn('quick', f('date').value);
       const vals = collect();
+      invPreview(vals);
       // novo lançamento: "pago" por padrão só se a primeira cobrança já passou
       if (!touchedPaid && !entry && f('paid') && vals.date) {
         const first = freq === 'none' ? vals.date : (firstOccurrence({ date: vals.date, recurrence: vals.recurrence }) || {}).date;
@@ -855,6 +1122,7 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
       if (!fits) catId = '';
       f('cats').innerHTML = categoryGrid(k, catId);
       if (f('paid-lbl')) f('paid-lbl').textContent = PAID_LABEL[k] + (occ && occ.recurring ? ' (esta ocorrência)' : '');
+      sync_();
     }
 
     function press(k) {
@@ -866,6 +1134,7 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
     function validateStep(n) {
       if (n === 1 && !cents) { toast('Digite o valor', 'err'); return false; }
       if (n === 2 && !catId) { toast('Escolha uma categoria', 'err'); return false; }
+      if (n === 3 && type === 'despesa' && pay === 'credito' && !store.card(cardSel)) { toast('Escolha o cartão', 'err'); return false; }
       return true;
     }
 
@@ -876,6 +1145,13 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
       if (d.key) { press(d.key); return; }
       if (d.type) { setType(d.type); return; }
       if (d.flow) { flow = d.flow; setOn('flow', flow); return; }
+      if (d.pay) { pay = d.pay; setOn('pay', pay); sync_(); return; }
+      if (d.card) { cardSel = d.card; setOn('card', cardSel); sync_(); return; }
+      if (d.inst) { inst = +d.inst; setOn('inst', inst); sync_(); return; }
+      if (d.newcard) {
+        openCardForm(null, (c) => { cardSel = c.id; f('cardlist').innerHTML = cardChips(); sync_(); });
+        return;
+      }
       if (d.goto) { goto(+d.goto); return; }
       if (d.cat) {
         catId = d.cat;
@@ -926,12 +1202,14 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
       if (!vals.amount) { toast('Digite o valor', 'err'); goto(1); return; }
       if (!vals.categoryId) { toast('Escolha uma categoria', 'err'); goto(2); return; }
       if (!vals.date) { toast('Informe a data', 'err'); goto(3); return; }
+      if (vals.payment === 'credito' && !store.card(vals.cardId)) { toast('Escolha o cartão', 'err'); goto(3); return; }
       const r = vals.recurrence;
       if (r.freq === 'weekly' && !r.byWeekday.length) { toast('Escolha ao menos um dia da semana', 'err'); goto(3); return; }
       if (r.freq !== 'none' && r.end.type === 'until' && (!r.end.until || r.end.until < vals.date)) { toast('A data final deve ser depois do início', 'err'); goto(3); return; }
 
       let result;
       if (!entry) result = createEntry(uid(), vals);
+      else if (vals.installments > 1 || entry.installments > 1) result = applyAll(entry, null, vals);
       else if (!isRecurring(entry)) result = updateSingle(entry, vals);
       else if (!occ) result = applyAll(entry, null, vals);
       else {
@@ -944,7 +1222,9 @@ function openEntryForm({ entry = null, occ = null, date = null, type: startType 
         if (!scope) return;
         result = scope === 'this' ? applyThis(entry, occ, vals) : scope === 'future' ? applyFuture(entry, occ, vals, uid()) : applyAll(entry, occ, vals);
       }
+      if (vals.installments > 1 || (entry && entry.installments > 1)) result.save = result.save.map(normalizeInstallments);
       store.applyEntries(result.save, result.remove);
+      if (vals.payment) { try { localStorage.setItem(LASTPAY_KEY, JSON.stringify({ pay: vals.payment, cardId: vals.cardId || cardSel })); } catch { /* nada */ } }
       close();
       toast(entry ? 'Alterações salvas' : 'Lançamento adicionado');
     }
@@ -1064,6 +1344,85 @@ function openCategoryForm(cat = null, group = 'variavel') {
 }
 
 // ---------------------------------------------------------------------------
+// Cadastro de cartão de crédito
+
+const CARD_EMOJIS = ['💳', '🟣', '🟠', '🔵', '🟢', '🔴', '🟡', '⚫', '⚪', '🏦', '💎', '⭐'];
+
+function openCardForm(card = null, onSaved = null) {
+  const c = card ? { ...card } : { id: `card-${uid()}`, name: '', emoji: '💳', color: COLORS[Math.floor(Math.random() * COLORS.length)], limit: 0, dueDay: 10, closeDays: DEFAULT_CLOSE_DAYS };
+  c.closeDays = closeDaysOf(c);
+  const used = store.entries().filter((e) => e.cardId === c.id).length;
+  openSheet(`
+    <div class="sheet-head"><button class="link" data-close>Cancelar</button><h2>${card ? 'Editar cartão' : 'Novo cartão'}</h2><button class="link strong" data-f="save">Salvar</button></div>
+    <div class="sheet-body">
+      <div class="cat-preview"><div class="tile big" id="k-tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div></div>
+      <div class="form-list">
+        <label class="field"><span>Nome</span><input id="k-name" value="${esc(c.name)}" placeholder="Ex.: Nubank" autocomplete="off"></label>
+        <label class="field"><span>Limite total</span><input id="k-limit" inputmode="numeric" value="${digitsDisplay(c.limit || 0)}" autocomplete="off" class="money-input"></label>
+      </div>
+      <p class="note">O limite disponível é calculado: limite total menos as compras no crédito cujas faturas ainda não foram pagas.</p>
+
+      <div class="flabel">Dia do vencimento da fatura</div>
+      <div class="chip-row scroll" id="k-due">${Array.from({ length: 31 }, (_, i) => chip('due', i + 1, i + 1, c.dueDay === i + 1, 'num')).join('')}</div>
+
+      <div class="flabel">Fechamento</div>
+      <div class="stepper"><button type="button" data-close-days="-1" aria-label="Menos">−</button><span><b id="k-close">${c.closeDays}</b> dias antes do vencimento</span><button type="button" data-close-days="1" aria-label="Mais">+</button></div>
+      <p class="note" id="k-rule"></p>
+
+      <div class="section-title">Ícone</div>
+      <div class="chip-row">${CARD_EMOJIS.map((em) => chip('em', em, em, c.emoji === em, 'num')).join('')}</div>
+      <div class="section-title">Cor</div>
+      <div class="swatches">${COLORS.map((col) => `<button type="button" data-col="${col}" class="${col === c.color ? 'on' : ''}" style="--c:${col}" aria-label="${col}"></button>`).join('')}</div>
+
+      ${card ? (card.archived
+        ? '<button class="btn full" data-f="unarchive">Reativar cartão</button>'
+        : `<button class="btn ghost danger full" data-f="${used ? 'archive' : 'delete'}">${used ? 'Arquivar cartão' : 'Excluir cartão'}</button>`)
+        + (used ? `<p class="note center">${used} lançamento(s) usam este cartão. Arquivado, ele some das opções do formulário, mas o histórico e as faturas continuam.</p>` : '') : ''}
+    </div>`, (el, close) => {
+    const tile = $('#k-tile', el);
+    const limitInput = $('#k-limit', el);
+    const explain = () => {
+      const t = todayISO();
+      const [y, m] = t.split('-').map(Number);
+      const n = addMonths(y, m, 1);
+      const inv = invoiceOf(c, `${n.y}-${String(n.m).padStart(2, '0')}`);
+      $('#k-close', el).textContent = c.closeDays;
+      $('#k-rule', el).innerHTML = `Ex.: a fatura que vence em <b>${fmtShort(inv.due)}</b> fecha em <b>${fmtShort(inv.close)}</b>. Compras até ${fmtShort(inv.close)} contam como gastos de ${MONTHS[Number(inv.ym.slice(5, 7)) - 1]}; a partir de ${fmtShort(addDays(inv.close, 1))}, entram na fatura seguinte.`;
+    };
+    explain();
+    limitInput.addEventListener('input', () => { c.limit = centsFromDigits(limitInput.value); limitInput.value = digitsDisplay(c.limit); });
+    limitInput.addEventListener('focus', () => limitInput.select());
+    el.addEventListener('click', async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      const d = b.dataset;
+      if (d.due) { c.dueDay = +d.due; $$('[data-due]', el).forEach((x) => x.classList.toggle('on', x === b)); explain(); return; }
+      if (d.closeDays) { c.closeDays = Math.min(28, Math.max(1, c.closeDays + +d.closeDays)); explain(); return; }
+      if (d.em) { c.emoji = d.em; tile.textContent = d.em; $$('[data-em]', el).forEach((x) => x.classList.toggle('on', x === b)); return; }
+      if (d.col) { c.color = d.col; tile.style.setProperty('--c', c.color); $$('.swatches button', el).forEach((x) => x.classList.toggle('on', x === b)); return; }
+      if (d.f === 'save') {
+        c.name = $('#k-name', el).value.trim();
+        if (!c.name) { toast('Dê um nome ao cartão', 'err'); return; }
+        if (!c.limit) { toast('Informe o limite', 'err'); return; }
+        store.saveCard(c);
+        close();
+        toast('Cartão salvo');
+        if (onSaved) onSaved(c);
+      }
+      if (d.f === 'archive' || d.f === 'unarchive') {
+        store.saveCard({ ...card, archived: d.f === 'archive' });
+        close();
+        toast(d.f === 'archive' ? 'Cartão arquivado' : 'Cartão reativado');
+      }
+      if (d.f === 'delete') {
+        const ok = await actionSheet('Excluir este cartão?', [{ label: 'Excluir cartão', value: true, style: 'destructive' }]);
+        if (ok) { store.deleteCard(c.id); close(); toast('Cartão excluído'); }
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Ações globais
 
 function exportJSON() {
@@ -1096,6 +1455,11 @@ document.addEventListener('click', async (e) => {
     case 'toggle-paid': {
       e.stopPropagation();
       const o = occIndex.get(el.dataset.key);
+      if (o && o.isInvoice) {
+        if (navigator.vibrate) navigator.vibrate(8);
+        store.setInvoicePaid(invoiceId(o.cardId, o.inv.dueYM), !o.paid);
+        break;
+      }
       const entry = o && store.entry(o.entryId);
       if (entry) {
         if (navigator.vibrate) navigator.vibrate(8);
@@ -1104,6 +1468,10 @@ document.addEventListener('click', async (e) => {
       break;
     }
     case 'open-occ': openOccurrence(el.dataset.key); break;
+    case 'open-invoice': openInvoice(el.dataset.card, el.dataset.due); break;
+    case 'add-card': openCardForm(); break;
+    case 'edit-card': openCardForm(store.card(el.dataset.id)); break;
+    case 'toggle-archived': ui.showArchived = !ui.showArchived; render(); break;
     case 'open-entry': { const en = store.entry(el.dataset.id); if (en) openEntryForm({ entry: en }); break; }
     case 'filter': ui.filter = el.dataset.value; saveUI(); render(); break;
     case 'filter-go': ui.filter = el.dataset.value; ui.tab = 'list'; saveUI(); render(); window.scrollTo(0, 0); break;

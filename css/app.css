@@ -478,3 +478,24 @@ body.locked .view { padding-bottom: calc(var(--safe-bottom) + 24px); }
 .ep-tabs { display: flex; justify-content: space-around; border-top: 1px solid var(--line); padding: 4px 4px calc(4px); background: var(--card-2); }
 .ep-tabs button { flex: 1; height: 38px; font-size: 20px; border-radius: 10px; filter: grayscale(1); opacity: .55; }
 .ep-tabs button.on { filter: none; opacity: 1; background: var(--card); }
+
+/* Cartões de crédito */
+.entry-form:not([data-kind="despesa"]) .exp-only { display: none; }
+.entry-form:not([data-paymode="credito"]) .credit-only { display: none; }
+.entry-form[data-instmode="multi"] .repeat-block { display: none; }
+.entry-form[data-paymode="credito"] .paid-field { display: none; }
+.pay { font-size: 12px; white-space: nowrap; }
+.check.card-mark { border: 0; font-size: 15px; background: color-mix(in srgb, var(--c) 18%, transparent); color: inherit; }
+.card-row { padding: 12px 16px 14px; border-top: 1px solid var(--line); cursor: pointer; }
+.card-head + .card-row { border-top: 0; }
+.card-row:active { background: var(--card-2); }
+.card-row-top { display: flex; align-items: center; gap: 12px; }
+.bar.limit { height: 8px; margin: 10px 0 8px; }
+.card-row-inv { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
+.card-row-inv b { color: var(--text); font-variant-numeric: tabular-nums; }
+.inv-status { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 99px; background: var(--card-2); color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.inv-status.paga { background: color-mix(in srgb, var(--inc) 14%, transparent); color: var(--inc); }
+.inv-status.fechada { background: color-mix(in srgb, var(--warn) 18%, transparent); color: #b7791f; }
+.inv-status.atrasada { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.inv-nav { justify-content: center; margin-bottom: 8px; }
+.inv-items { margin-top: 12px; }
