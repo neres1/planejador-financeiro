@@ -66,6 +66,37 @@ test('OFX: transações, entidades e parcelas', () => {
   assert.equal(readStatement(OFX, 'fatura.ofx').format, 'OFX');
 });
 
+test('OFX do Nubank (tags fechadas, cabeçalho SGML, parcelas antigas no dia 1º)', () => {
+  const t = (date, amt, id, memo, type = 'DEBIT') => `<STMTTRN>\n<TRNTYPE>${type}</TRNTYPE>\n<DTPOSTED>${date}000000[-3:BRT]</DTPOSTED>\n<TRNAMT>${amt}</TRNAMT>\n<FITID>${id}</FITID>\n<MEMO>${memo}</MEMO>\n</STMTTRN>`;
+  const ofx = `OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\nSECURITY:NONE\nENCODING:USASCII\nCHARSET:1252\n<OFX>\n<SIGNONMSGSRSV1>\n<SONRS>\n<STATUS>\n<CODE>0</CODE>\n</STATUS>\n<DTSERVER>20261001012451[0:GMT]</DTSERVER>\n<FI>\n<ORG>NU PAGAMENTOS S.A.</ORG>\n</FI>\n</SONRS>\n</SIGNONMSGSRSV1>\n`
+    + `<CREDITCARDMSGSRSV1>\n<CCSTMTTRNRS>\n<CCSTMTRS>\n<CURDEF>BRL</CURDEF>\n<BANKTRANLIST>\n<DTSTART>20260901000000[-3:BRT]</DTSTART>\n<DTEND>20261001000000[-3:BRT]</DTEND>\n`
+    + [t('20260923', '-16.90', 'f1', 'Dl*Google Youtub'), t('20260922', '70.56', 'f2', 'Pagamento recebido', 'CREDIT'),
+      t('20260913', '-6.75', 'f3', 'Uber Uber *Trip Help.U'), t('20260909', '-28.48', 'f4', 'Almeidaatacarejo'),
+      t('20260905', '-68.08', 'f5', 'Loja Exemplo - Parcela 1/12'), t('20260901', '-95.74', 'f6', 'Drogar Centro - Parcela 2/4'),
+      t('20260901', '-134.45', 'f7', 'Mercado*Mercadolivre - Parcela 2/2')].join('\n')
+    + `\n</BANKTRANLIST>\n<LEDGERBAL>\n<BALAMT>-2842.04</BALAMT>\n</LEDGERBAL>\n</CCSTMTRS>\n</CCSTMTTRNRS>\n</CREDITCARDMSGSRSV1>\n</OFX>\n`;
+  const { format, txs } = readStatement(new TextEncoder().encode(ofx), 'Nubank_2026-10-08.ofx');
+  assert.equal(format, 'OFX');
+  assert.equal(txs.length, 7);
+  const { purchases, credits } = splitTransactions(txs);
+  assert.equal(purchases.length, 6);
+  assert.equal(credits.length, 1);
+  const c = card({ dueDay: 8 });
+  assert.equal(detectDueYM(c, purchases), '2026-10');
+  const items = planImport(purchases, c, [], '2026-10', cats);
+  const by = (d) => items.find((i) => i.description === d);
+  assert.equal(by('Dl*Google Youtub').categoryId, 'cat-assinaturas');
+  assert.equal(by('Uber Uber *Trip Help.U').categoryId, 'cat-transporte');
+  assert.equal(by('Almeidaatacarejo').categoryId, 'cat-mercado');
+  assert.equal(by('Drogar Centro').categoryId, 'cat-farmacia');
+  assert.equal(by('Mercado*Mercadolivre').categoryId, 'cat-compras');
+  // parcela antiga com data 01/09 (antes do ciclo 02/09–01/10) entra na fatura e as próximas seguem
+  const entries = importEntries(items, c, makeId);
+  const drog = entries.find((e) => e.description === 'Drogar Centro');
+  assert.equal(drog.recurrence.end.count, 3);
+  assert.deepEqual(invoiceItems(c, entries, '2026-12').filter((o) => o.entryId === drog.id).map((o) => `${o.n}/${o.total}`), ['4/4']);
+});
+
 test('CSV do Nubank (vírgula, ponto decimal, compras positivas)', () => {
   const csv = 'date,title,amount\n2026-03-05,Ifood,45.90\n2026-03-06,Pagamento recebido,-800.00\n2026-03-08,"Mercado Livre - Parcela 2/3",99.97\n';
   const txs = parseCSV(csv);

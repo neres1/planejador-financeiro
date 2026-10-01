@@ -591,7 +591,7 @@ function renderSettings() {
     <section class="card">
       <div class="btn-row">
         <button class="btn" data-action="export">Exportar JSON</button>
-        <label class="btn">Importar JSON<input type="file" id="import-file" accept="application/json,.json" hidden></label>
+        <label class="btn">Importar JSON<input type="file" id="import-file" hidden></label>
       </div>
       <p class="note">O arquivo exportado <b>não</b> é criptografado — guarde-o em local seguro.</p>
     </section>
@@ -620,7 +620,7 @@ function cardsSettings() {
     <div class="card flush">
       ${active.map(row).join('')}
       <button class="more" data-action="add-card">+ Novo cartão</button>
-      <label class="more">Importar fatura (OFX ou CSV)<input type="file" id="statement-file" accept="${STATEMENT_ACCEPT}" hidden></label>
+      <label class="more">📄 Importar fatura (OFX ou CSV)<input type="file" id="statement-file" hidden></label>
     </div>
     ${archived.length ? `<button class="more" data-action="toggle-archived">${ui.showArchived ? 'Ocultar' : 'Mostrar'} arquivados (${archived.length})</button>
       ${ui.showArchived ? `<div class="card flush">${archived.map(row).join('')}</div>` : ''}` : ''}`;
@@ -851,7 +851,7 @@ function openInvoice(cardId, dueYM) {
       </div>
       ${items.length ? `<button class="btn big ${paid ? '' : 'primary'} full" data-f="pay">${paid ? '✓ Fatura paga — desmarcar' : 'Marcar fatura como paga'}</button>` : ''}
       ${items.length ? `<div class="card flush inv-items">${items.map((o) => occRow(o)).join('')}</div>` : '<p class="note center">Nenhuma compra nesta fatura.</p>'}
-      <label class="btn full">📄 Importar esta fatura (OFX ou CSV)<input type="file" data-f="import" accept="${STATEMENT_ACCEPT}" hidden></label>`;
+      <label class="btn full">📄 Importar esta fatura (OFX ou CSV)<input type="file" data-f="import" hidden></label>`;
   };
   openSheet(`
     <div class="sheet-head"><button class="link" data-close>Fechar</button><h2>${esc(card.emoji)} ${esc(card.name)}</h2><span></span></div>
@@ -1513,7 +1513,9 @@ function openAlertForm(alert = null) {
 // ---------------------------------------------------------------------------
 // Importar fatura do cartão (OFX ou CSV)
 
-const STATEMENT_ACCEPT = '.ofx,.qfx,.csv,.txt,text/csv,application/x-ofx';
+// Os campos de arquivo da fatura não usam `accept`: o iPhone deixa .ofx cinza (tipo desconhecido)
+// e não deixa escolher. O formato é reconhecido pelo conteúdo.
+const isStatementFile = (name, text) => /.(ofx|qfx|csv|txt)$/i.test(name) || /OFXHEADER|<OFX>|<STMTTRN>/i.test(text.slice(0, 4000));
 const STATUS_TAG = { imported: '<span class="badge today">Já importado</span>', probable: '<span class="badge today">Parece já lançado</span>' };
 
 async function openStatementImport(file, presetCard = null, presetDue = null) {
@@ -1726,16 +1728,18 @@ document.addEventListener('change', async (e) => {
   }
   if (e.target.id !== 'import-file') return;
   const file = e.target.files[0];
+  e.target.value = '';
   if (!file) return;
   try {
-    const doc = JSON.parse(await file.text());
+    const text = await file.text();
+    if (isStatementFile(file.name, text)) { openStatementImport(file); return; } // fatura escolhida no botão de backup
+    const doc = JSON.parse(text);
     if (!validateDoc(doc)) throw new Error('Arquivo inválido');
     store.importDoc(doc);
     toast(`Importado: ${doc.entries.filter((x) => !x.deleted).length} lançamentos`);
   } catch (err) {
     toast(`Não foi possível importar: ${err.message}`, 'err');
   }
-  e.target.value = '';
 });
 
 // ---------------------------------------------------------------------------

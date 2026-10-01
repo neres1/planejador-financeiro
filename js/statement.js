@@ -240,12 +240,12 @@ export function splitTransactions(txs, flip = false) {
 // Categoria sugerida
 
 const RULES = [
-  ['cat-mercado', /supermerc|mercado(?!\s*(livre|pago))|carrefour|atacad|assai|pao de acucar|extra hiper|hortifruti|sacolao|dia brasil|zaffari|mambo|oba hort/],
-  ['cat-restaurantes', /ifood|ifd\*|restaur|lanchonete|burger|mc ?donald|bk |habib|padaria|pizza|bar e |cafeteria|starbucks|outback|subway|rappi|coco bambu|sushi/],
+  ['cat-mercado', /supermerc|mercado(?!\s*(livre|pago)|\*mercadoli)|carrefour|atacad|atacarejo|sup epa|\bepa\b|assai|pao de acucar|extra hiper|hortifruti|sacolao|dia brasil|zaffari|mambo|oba hort/],
+  ['cat-restaurantes', /ifood|ifd\*|restaur|lanche|choperia|chopp|burger|mc ?donald|bk |habib|padaria|pizza|bar e |cafeteria|starbucks|outback|subway|rappi|coco bambu|sushi/],
   ['cat-combustivel', /posto|shell|ipiranga|petrobras|br mania|combust|auto posto|gasolin/],
-  ['cat-transporte', /uber|\b99 ?(app|pop|taxi|tecnologia)\b|cabify|metro|estacion|sem parar|veloe|conectcar|pedagio|onibus|bilhete unico|taxi/],
-  ['cat-farmacia', /drogaria|farmac|droga ?raia|drogasil|pague menos|panvel|pacheco|ultrafarma/],
-  ['cat-assinaturas', /netflix|spotify|prime video|amazon prime|disney|hbo|max\.com|youtube|apple\.com|google one|globoplay|deezer|paramount|chatgpt|openai|claude\.ai|anthropic|icloud|microsoft|adobe|crunchyroll/],
+  ['cat-transporte', /uber|\b99 ?(app|pop|taxi|tecnologia)\b|cabify|metro|estacion|sem parar|veloe|conectcar|pedagio|onibus|bilhete unico|transfacil|taxi/],
+  ['cat-farmacia', /drogar|farmac|droga ?raia|drogasil|pague menos|panvel|pacheco|ultrafarma/],
+  ['cat-assinaturas', /netflix|spotify|prime video|amazon prime|disney|hbo|max\.com|youtub|apple\.com|google one|globoplay|deezer|paramount|chatgpt|openai|claude\.ai|anthropic|icloud|microsoft|adobe|crunchyroll/],
   ['cat-viagem', /hotel|airbnb|latam|\bgol\b|azul linhas|booking|decolar|\bcvc\b|hostel|pousada|123 ?milhas|smiles/],
   ['cat-internet', /vivo|claro|\btim\b|oi fibra|net servicos|internet/],
   ['cat-saude', /unimed|amil|bradesco saude|sulamerica|hapvida|laborat|clinica|hospital|odonto|dentist/],
