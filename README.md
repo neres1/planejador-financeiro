@@ -20,6 +20,12 @@ Organizador financeiro **pessoal** inspirado no Splitwise: em vez de dividir con
   - **Parcelado em N×**: o limite desconta o total na compra e cada parcela cai numa fatura. Recorrências no crédito (assinaturas) caem cada uma no seu ciclo.
   - No Resumo: limite disponível e fatura do mês de cada cartão. Cartão com compras é arquivado em vez de excluído.
 - **Alertas de gastos** (Ajustes → Alertas de gastos): um valor, uma mensagem sua e o cartão (ou todos somados). Ao escolher **Crédito** num lançamento, se a fatura em aberto já atingiu o valor, a mensagem aparece no formulário — só como lembrete, sem impedir o lançamento.
+- **Importar fatura (OFX ou CSV)** (Ajustes → Cartões de crédito, ou dentro da fatura do cartão):
+  - lê OFX e CSV de bancos brasileiros (Nubank, C6, Inter, Itaú etc.): separador `;` ou `,`, valores `1.234,56` ou `1234.56`, arquivos em UTF-8 ou Windows-1252;
+  - detecta a fatura pelas datas (dá para trocar) e mostra a lista para revisar antes: marcar/desmarcar e escolher a categoria (sugerida pelo histórico e pelo nome da loja);
+  - pagamentos e estornos são ignorados; datas fora do ciclo são ajustadas para cair na fatura (a original fica nas observações);
+  - **parcelas**: "Loja 3/10" lança de uma vez a 3ª até a 10ª, uma em cada fatura, e o limite desconta o que falta;
+  - não duplica: reimportar a mesma fatura, ou a do mês seguinte com a próxima parcela, aparece como "já importado"; compras lançadas à mão com mesmo valor e data próxima aparecem como "parece já lançado".
 - **Agenda**: calendário do mês com marcadores de receitas, despesas e contas atrasadas.
 - **Recorrentes**: todas as contas fixas, assinaturas, salário e parcelas, com a próxima data e o compromisso mensal estimado.
 - **Categorias** editáveis, agrupadas em *Despesas fixas*, *Despesas variáveis* e *Receitas*.

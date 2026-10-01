@@ -18,6 +18,7 @@ import {
   cardOccurrences, invoiceItems, cardUsed, splitInstallments, installmentRecurrence, normalizeInstallments,
   triggeredAlerts,
 } from './cards.js';
+import { readStatement, splitTransactions, detectDueYM, planImport, importEntries, invoiceWindow } from './statement.js';
 import { auth, db } from './supa.js';
 import { keystore } from './keystore.js';
 import {
@@ -619,6 +620,7 @@ function cardsSettings() {
     <div class="card flush">
       ${active.map(row).join('')}
       <button class="more" data-action="add-card">+ Novo cartão</button>
+      <label class="more">Importar fatura (OFX ou CSV)<input type="file" id="statement-file" accept="${STATEMENT_ACCEPT}" hidden></label>
     </div>
     ${archived.length ? `<button class="more" data-action="toggle-archived">${ui.showArchived ? 'Ocultar' : 'Mostrar'} arquivados (${archived.length})</button>
       ${ui.showArchived ? `<div class="card flush">${archived.map(row).join('')}</div>` : ''}` : ''}`;
@@ -848,12 +850,17 @@ function openInvoice(cardId, dueYM) {
         <div><span>Compras</span><b>${items.length}</b></div>
       </div>
       ${items.length ? `<button class="btn big ${paid ? '' : 'primary'} full" data-f="pay">${paid ? '✓ Fatura paga — desmarcar' : 'Marcar fatura como paga'}</button>` : ''}
-      ${items.length ? `<div class="card flush inv-items">${items.map((o) => occRow(o)).join('')}</div>` : '<p class="note center">Nenhuma compra nesta fatura.</p>'}`;
+      ${items.length ? `<div class="card flush inv-items">${items.map((o) => occRow(o)).join('')}</div>` : '<p class="note center">Nenhuma compra nesta fatura.</p>'}
+      <label class="btn full">📄 Importar esta fatura (OFX ou CSV)<input type="file" data-f="import" accept="${STATEMENT_ACCEPT}" hidden></label>`;
   };
   openSheet(`
     <div class="sheet-head"><button class="link" data-close>Fechar</button><h2>${esc(card.emoji)} ${esc(card.name)}</h2><span></span></div>
     <div class="sheet-body" id="inv-body">${body()}</div>`, (el, close) => {
     const root = $('#inv-body', el);
+    el.addEventListener('change', (e) => {
+      const f = e.target.closest('[data-f=import]');
+      if (f && f.files[0]) { close(); openStatementImport(f.files[0], card.id, cur); }
+    });
     el.addEventListener('click', (e) => {
       const nav = e.target.closest('[data-nav]');
       if (nav) { cur = shift(cur, +nav.dataset.nav); root.innerHTML = body(); return; }
@@ -1504,6 +1511,132 @@ function openAlertForm(alert = null) {
 }
 
 // ---------------------------------------------------------------------------
+// Importar fatura do cartão (OFX ou CSV)
+
+const STATEMENT_ACCEPT = '.ofx,.qfx,.csv,.txt,text/csv,application/x-ofx';
+const STATUS_TAG = { imported: '<span class="badge today">Já importado</span>', probable: '<span class="badge today">Parece já lançado</span>' };
+
+async function openStatementImport(file, presetCard = null, presetDue = null) {
+  let parsed;
+  try {
+    parsed = readStatement(new Uint8Array(await file.arrayBuffer()), file.name);
+  } catch (err) {
+    toast(`Não foi possível ler o arquivo: ${err.message}`, 'err');
+    return;
+  }
+  let lastCard = null;
+  try { lastCard = JSON.parse(localStorage.getItem(LASTPAY_KEY) || 'null')?.cardId; } catch { /* nada */ }
+  const pick = [presetCard, lastCard].find((id) => id && store.card(id) && !store.card(id).archived);
+  const st = { cardId: pick || (store.cards()[0] || {}).id || null, dueYM: presetDue, baseDue: null, flip: false, items: [], credits: [], edits: new Map() };
+
+  const plan = () => {
+    const card = store.card(st.cardId);
+    const { purchases, credits } = splitTransactions(parsed.txs, st.flip);
+    st.credits = credits;
+    if (!card || !purchases.length) { st.items = []; return; }
+    st.baseDue = detectDueYM(card, purchases);
+    if (!st.dueYM) st.dueYM = st.baseDue;
+    st.items = planImport(purchases, card, store.entries(), st.dueYM, store.categories())
+      .map((it) => ({ ...it, ...(st.edits.get(it.row) || {}) }));
+  };
+
+  const catOptions = (sel) => ['fixo', 'variavel'].map((g) => `<optgroup label="${GROUPS[g].label}">${store.categories()
+    .filter((c) => c.group === g).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? 'selected' : ''}>${esc(c.emoji)} ${esc(c.name)}</option>`).join('')}</optgroup>`).join('');
+
+  const row = (it, i) => {
+    const p = it.parcel;
+    const left = p ? p.n - p.k + 1 : 0;
+    return `
+      <div class="item imp-row ${it.include ? '' : 'is-paid'}">
+        <button type="button" class="check exp ${it.include ? 'on' : ''}" data-row="${i}" aria-label="${it.include ? 'Não importar' : 'Importar'}">${ICONS.check}</button>
+        <div class="item-main">
+          <div class="item-title">${esc(it.description)}</div>
+          <div class="item-sub">${fmtShort(it.date)}${it.date !== it.origDate ? ` <span class="imp-orig">(arquivo: ${fmtShort(it.origDate)})</span>` : ''}
+            ${p ? `<span class="pill">${p.k}/${p.n}</span>` : ''} ${STATUS_TAG[it.status] || ''}</div>
+          <select class="imp-cat" data-cat="${i}" aria-label="Categoria">${catOptions(it.categoryId)}</select>
+        </div>
+        <div class="item-amount exp"><span class="amt">−${money(it.amount)}</span>${p ? `<small>${left > 1 ? `+ ${left - 1} parcela${left > 2 ? 's' : ''}` : 'última'}</small>` : ''}</div>
+      </div>`;
+  };
+
+  const body = () => {
+    const cards = store.cards();
+    if (!cards.length) {
+      return `<p class="note">Cadastre o cartão desta fatura para continuar.</p>
+        <button class="btn primary full" data-f="new-card">+ Novo cartão</button>`;
+    }
+    const card = store.card(st.cardId);
+    const head = `
+      <p class="note imp-file">📄 ${esc(file.name)} · ${parsed.format} · ${parsed.txs.length} linha${parsed.txs.length === 1 ? '' : 's'}</p>
+      <div class="flabel">Cartão</div>
+      <div class="chip-row">${cards.map((c) => chip('icard', c.id, `${esc(c.emoji)} ${esc(c.name)}`, c.id === st.cardId)).join('')}</div>`;
+    if (!card) return head;
+    if (!st.items.length) {
+      return `${head}<p class="note">Nenhuma compra encontrada no arquivo${st.credits.length ? ` — só ${st.credits.length} crédito(s)/pagamento(s)` : ''}.</p>
+        <button class="link" data-f="flip">Os valores estão com o sinal invertido?</button>`;
+    }
+    const dues = [-1, 0, 1].map((k) => { const [y, m] = st.baseDue.split('-').map(Number); const n = addMonths(y, m, k); return `${n.y}-${String(n.m).padStart(2, '0')}`; });
+    if (!dues.includes(st.dueYM)) dues.push(st.dueYM);
+    const win = invoiceWindow(card, st.dueYM);
+    const sel = st.items.filter((it) => it.include);
+    const total = sel.reduce((a, it) => a + it.amount, 0);
+    const parcels = sel.filter((it) => it.parcel && it.parcel.k < it.parcel.n);
+    const skipped = st.items.filter((it) => it.status !== 'new').length;
+    const credits = st.credits.reduce((a, t) => a + t.amount, 0);
+    return `${head}
+      <div class="flabel">Fatura</div>
+      <div class="chip-row">${dues.map((ym) => { const inv = invoiceOf(card, ym); return chip('idue', ym, `${MON3(inv.ym)} · vence ${fmtShort(inv.due)}`, ym === st.dueYM); }).join('')}</div>
+      <p class="note">Compras de ${fmtShort(win.start)} a ${fmtShort(win.end)}. Datas fora desse período são ajustadas para cair nesta fatura (a data do arquivo fica nas observações).</p>
+      <div class="imp-sum">
+        <div><b>${sel.length}</b> de ${st.items.length} compras · <b>${money(total)}</b></div>
+        ${parcels.length ? `<div>🧾 ${parcels.length} parcelada${parcels.length > 1 ? 's' : ''}: as parcelas seguintes também serão lançadas, uma em cada fatura.</div>` : ''}
+        ${skipped ? `<div>⚠️ ${skipped} já lançada${skipped > 1 ? 's' : ''} ou parecida${skipped > 1 ? 's' : ''} com outra — desmarcada${skipped > 1 ? 's' : ''}.</div>` : ''}
+        ${st.credits.length ? `<div>↩︎ ${st.credits.length} pagamento${st.credits.length > 1 ? 's' : ''}/estorno${st.credits.length > 1 ? 's' : ''} ignorado${st.credits.length > 1 ? 's' : ''} (${money(credits)}).</div>` : ''}
+      </div>
+      <div class="btn-row imp-bulk">
+        <button class="btn" data-f="all">Marcar todas</button>
+        <button class="btn" data-f="none">Desmarcar todas</button>
+      </div>
+      <div class="card flush imp-list">${st.items.map(row).join('')}</div>
+      <button class="link imp-flip" data-f="flip">Compras e pagamentos estão trocados? Inverter sinais</button>`;
+  };
+
+  plan();
+  openSheet(`
+    <div class="sheet-head"><button class="link" data-close>Cancelar</button><h2>Importar fatura</h2><button class="link strong" data-f="save">Importar</button></div>
+    <div class="sheet-body" id="imp-body">${body()}</div>`, (el, close) => {
+    const root = $('#imp-body', el);
+    const refresh = () => { const y = root.scrollTop; root.innerHTML = body(); root.scrollTop = y; };
+    const edit = (it, patch) => { Object.assign(it, patch); st.edits.set(it.row, { ...(st.edits.get(it.row) || {}), ...patch }); };
+    el.addEventListener('change', (e) => {
+      const s = e.target.closest('[data-cat]');
+      if (s) edit(st.items[+s.dataset.cat], { categoryId: s.value });
+    });
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      const d = b.dataset;
+      if (d.row !== undefined) { const it = st.items[+d.row]; edit(it, { include: !it.include }); refresh(); return; }
+      if (d.icard !== undefined) { st.cardId = d.icard; st.dueYM = null; st.edits.clear(); plan(); refresh(); return; }
+      if (d.idue !== undefined) { st.dueYM = d.idue; plan(); refresh(); return; }
+      if (d.f === 'flip') { st.flip = !st.flip; st.dueYM = null; st.edits.clear(); plan(); refresh(); return; }
+      if (d.f === 'all' || d.f === 'none') { for (const it of st.items) edit(it, { include: d.f === 'all' }); refresh(); return; }
+      if (d.f === 'new-card') { openCardForm(null, (c) => { st.cardId = c.id; plan(); refresh(); }); return; }
+      if (d.f === 'save') {
+        const card = store.card(st.cardId);
+        if (!card) { toast('Escolha o cartão', 'err'); return; }
+        const entries = importEntries(st.items, card, uid);
+        if (!entries.length) { toast('Nenhuma compra marcada', 'err'); return; }
+        store.saveEntries(...entries);
+        close();
+        const n = entries.length, p = entries.filter((x) => x.installments).length;
+        toast(`${n} compra${n > 1 ? 's' : ''} importada${n > 1 ? 's' : ''}${p ? ` (${p} parcelada${p > 1 ? 's' : ''})` : ''}`);
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Ações globais
 
 function exportJSON() {
@@ -1585,6 +1718,12 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('change', async (e) => {
+  if (e.target.id === 'statement-file') {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (file) openStatementImport(file);
+    return;
+  }
   if (e.target.id !== 'import-file') return;
   const file = e.target.files[0];
   if (!file) return;

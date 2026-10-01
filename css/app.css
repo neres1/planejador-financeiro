@@ -506,3 +506,17 @@ body.locked .view { padding-bottom: calc(var(--safe-bottom) + 24px); }
 .spend-alert .sa-icon { font-size: 20px; line-height: 1.2; }
 .spend-alert p { margin: 0 0 4px; font-weight: 600; white-space: pre-wrap; }
 .spend-alert small { color: var(--muted); font-size: 13px; }
+
+/* Importar fatura */
+label.more { cursor: pointer; }
+.imp-file { margin: 0 0 4px; }
+.imp-sum { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--card); font-size: 14px; display: grid; gap: 4px; }
+.imp-sum div:not(:first-child) { color: var(--muted); }
+.imp-bulk { margin: 10px 0; }
+.imp-bulk .btn { flex: 1; min-height: 38px; font-size: 14px; }
+.imp-row { align-items: flex-start; }
+.imp-row .check { margin-top: 2px; }
+.imp-orig { color: var(--warn); }
+.imp-cat { display: block; max-width: 100%; margin-top: 6px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2); }
+.imp-row.is-paid .imp-cat { opacity: .55; }
+.imp-flip { display: block; margin: 14px auto 4px; font-size: 13px; font-weight: 500; }
