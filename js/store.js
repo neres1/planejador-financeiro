@@ -1,7 +1,8 @@
 // Documento de dados + cópia local criptografada (por usuário) + mesclagem entre aparelhos.
 //
 // doc = { schema, updatedAt, categories: [...], entries: [...], cards: [...], invoices: [...] }
-// (cartões de crédito e faturas pagas: { id: 'inv-<cartão>-<AAAA-MM do vencimento>', paid })
+// (cartões de crédito e faturas pagas: { id: 'inv-<cartão>-<AAAA-MM do vencimento>', paid, paidAmount? };
+// com `paidAmount` a fatura foi paga só em parte e o restante vai para a fatura seguinte)
 // alerts: [{ id: 'alert-…', cardId ('' = todos os cartões), amount (centavos), message, active }]
 // Cada item tem `id` e `updatedAt`; exclusões viram "lápides" { id, deleted: true, updatedAt }
 // para que a exclusão também se propague para os outros aparelhos.
@@ -186,6 +187,7 @@ export const store = {
   card(id) { return this.doc.cards.find((c) => c.id === id && !c.deleted) || null; },
   alerts() { return this.doc.alerts.filter((a) => !a.deleted); },
   invoicePaid(id) { const x = this.doc.invoices.find((i) => i.id === id); return !!(x && !x.deleted && x.paid); },
+  invoicePay(id) { const x = this.doc.invoices.find((i) => i.id === id); return x && !x.deleted && x.paid ? x : null; },
 
   _upsert(list, items) {
     const stamp = nowStamp();
@@ -211,6 +213,8 @@ export const store = {
   saveAlert(a) { this._upsert('alerts', [a]); },
   deleteAlert(id) { this._upsert('alerts', [{ id, deleted: true }]); },
   setInvoicePaid(id, paid) { this._upsert('invoices', [{ id, paid: !!paid }]); },
+  // Pagamento de só uma parte da fatura (centavos).
+  setInvoicePartial(id, amount) { this._upsert('invoices', [{ id, paid: true, paidAmount: amount }]); },
 
   // Importa um backup JSON: tudo que for mais novo entra e é enviado ao servidor.
   importDoc(doc) {

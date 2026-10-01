@@ -16,7 +16,7 @@ import { EMOJI_GROUPS } from './emoji.js';
 import {
   PAYMENTS, paymentOf, isCredit, closeDaysOf, DEFAULT_CLOSE_DAYS, invoiceId, invoiceOf, invoiceFor, invoiceForMonth,
   cardOccurrences, invoiceItems, cardUsed, splitInstallments, installmentRecurrence, normalizeInstallments,
-  triggeredAlerts,
+  triggeredAlerts, invoiceSummary,
 } from './cards.js';
 import { readStatement, splitTransactions, detectDueYM, planImport, importEntries, invoiceWindow } from './statement.js';
 import { auth, db } from './supa.js';
@@ -104,14 +104,20 @@ function occurrencesIn(from, to, ym = null) {
   return list;
 }
 
-// Fatura de um cartão como uma conta a pagar no vencimento (null se não tem compras).
+// Pagamento registrado de cada fatura do cartão, e a fatura com saldo anterior e valor pago.
+const payOf = (card) => (due) => store.invoicePay(invoiceId(card.id, due));
+const invSummary = (card, dueYM) => invoiceSummary(card, store.entries(), dueYM, payOf(card));
+
+// Fatura de um cartão como uma conta a pagar no vencimento (null se não tem compras nem saldo).
+// Paga em parte, conta no caixa só o valor pago; o restante entra na fatura seguinte.
 function invoiceRow(card, inv) {
-  const items = invoiceItems(card, store.entries(), inv.dueYM);
-  if (!items.length) return null;
+  const s = invSummary(card, inv.dueYM);
+  if (!s.items.length && !s.carry) return null;
   return {
     key: `inv:${card.id}:${inv.dueYM}`, isInvoice: true, type: 'despesa', payment: 'credito', cardId: card.id, inv,
-    date: inv.due, amount: items.reduce((a, o) => a + o.amount, 0), count: items.length,
-    description: `Fatura ${card.name}`, notes: '', paid: store.invoicePaid(invoiceId(card.id, inv.dueYM)),
+    date: inv.due, amount: s.status === 'partial' ? s.paid : s.total, total: s.total, carry: s.carry,
+    partial: s.status === 'partial', count: s.items.length,
+    description: `Fatura ${card.name}`, notes: '', paid: s.status !== 'none',
   };
 }
 
@@ -204,9 +210,9 @@ function occRow(o, { showDate = true } = {}) {
       <div class="tile" style="--c:${esc(c.color)}">${esc(c.emoji)}</div>
       <div class="item-main">
         <div class="item-title">${esc(o.description)}</div>
-        <div class="item-sub">${showDate ? `${fmtShort(o.date)} · ` : ''}${o.count} ${o.count === 1 ? 'compra' : 'compras'} · gastos de ${MON3(o.inv.ym)} ${badge}</div>
+        <div class="item-sub">${showDate ? `${fmtShort(o.date)} · ` : ''}${o.count} ${o.count === 1 ? 'compra' : 'compras'}${o.carry ? ' + saldo anterior' : ''} · gastos de ${MON3(o.inv.ym)} ${badge}</div>
       </div>
-      <div class="item-amount exp"><span class="amt">−${money(o.amount)}</span><small>${o.paid ? 'paga' : 'Fatura'}</small></div>
+      <div class="item-amount exp"><span class="amt">−${money(o.amount)}</span><small>${o.partial ? `parcial de ${money(o.total)}` : o.paid ? 'paga' : 'Fatura'}</small></div>
     </div>`;
   }
   if (o.credit) {
@@ -343,12 +349,13 @@ function cardsCard() {
   return `<section class="card flush">
     <div class="card-head pad"><h2>💳 Cartões de crédito</h2></div>
     ${cards.map((card) => {
-      const used = cardUsed(card, entries, (due) => store.invoicePaid(invoiceId(card.id, due)), t);
+      const used = cardUsed(card, entries, payOf(card), t);
       const limit = card.limit || 0;
       const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
       const inv = invoiceForMonth(card, ui.month);
-      const total = invoiceItems(card, entries, inv.dueYM).reduce((a, o) => a + o.amount, 0);
-      const st = invoiceStatus(card, inv);
+      const s = invSummary(card, inv.dueYM);
+      const total = s.total;
+      const st = invoiceStatus(card, inv, s);
       return `<div class="card-row" data-action="open-invoice" data-card="${esc(card.id)}" data-due="${inv.dueYM}">
         <div class="card-row-top">
           <div class="tile" style="--c:${esc(card.color)}">${esc(card.emoji)}</div>
@@ -364,9 +371,11 @@ function cardsCard() {
   </section>`;
 }
 
-function invoiceStatus(card, inv) {
+function invoiceStatus(card, inv, s = invSummary(card, inv.dueYM)) {
   const t = todayISO();
-  if (store.invoicePaid(invoiceId(card.id, inv.dueYM))) return 'paga';
+  if (s.status === 'full') return 'paga';
+  if (s.status === 'partial') return 'parcial';
+  if (!s.total) return 'sem compras';
   return t > inv.due ? 'atrasada' : t > inv.close ? 'fechada' : 'aberta';
 }
 
@@ -826,14 +835,43 @@ function openInvoice(cardId, dueYM) {
   const card = store.card(cardId);
   if (!card) return;
   let cur = dueYM;
+  let partialOpen = false;
+  let partialValue = 0;
   const shift = (ym, k) => { const [y, m] = ym.split('-').map(Number); const n = addMonths(y, m, k); return `${n.y}-${String(n.m).padStart(2, '0')}`; };
+  const monthName = (ym) => MONTHS[Number(invoiceOf(card, ym).ym.slice(5, 7)) - 1];
   const body = () => {
     const inv = invoiceOf(card, cur);
-    const items = invoiceItems(card, store.entries(), cur).sort((a, b) => (a.date < b.date ? -1 : 1));
-    const paid = store.invoicePaid(invoiceId(card.id, cur));
-    for (const o of items) o.paid = paid;
-    const total = items.reduce((a, o) => a + o.amount, 0);
-    const st = invoiceStatus(card, inv);
+    const s = invSummary(card, cur);
+    const items = [...s.items].sort((a, b) => (a.date < b.date ? -1 : 1));
+    for (const o of items) o.paid = s.status !== 'none';
+    const st = invoiceStatus(card, inv, s);
+    const prevName = monthName(shift(cur, -1));
+    const nextName = monthName(shift(cur, 1));
+    let actions = '';
+    if (s.total > 0 && partialOpen) {
+      actions = `
+        <div class="partial-box">
+          <label class="field"><span>Quanto você pagou?</span><input id="pp-amount" inputmode="numeric" value="${digitsDisplay(partialValue)}" autocomplete="off" class="money-input"></label>
+          <p class="note" id="pp-rest"></p>
+          <div class="btn-row">
+            <button class="btn" data-f="partial-cancel">Cancelar</button>
+            <button class="btn primary" data-f="partial-save">Confirmar pagamento</button>
+          </div>
+        </div>`;
+    } else if (s.total > 0 && s.status === 'none') {
+      actions = `
+        <button class="btn big primary full" data-f="pay">Pagar fatura inteira (${money(s.total)})</button>
+        <button class="btn full" data-f="partial">Pagar só uma parte</button>`;
+    } else if (s.status === 'partial') {
+      actions = `
+        <button class="btn big primary full" data-f="pay">Pagar o restante (${money(s.remaining)})</button>
+        <div class="btn-row">
+          <button class="btn" data-f="partial">Alterar valor pago</button>
+          <button class="btn ghost danger" data-f="unpay">Desfazer pagamento</button>
+        </div>`;
+    } else if (s.status === 'full' && s.total > 0) {
+      actions = '<button class="btn big full" data-f="unpay">✓ Fatura paga — desmarcar</button>';
+    }
     return `
       <div class="month-nav inv-nav">
         <button class="icon-btn" data-nav="-1" aria-label="Fatura anterior">${ICONS.left}</button>
@@ -841,15 +879,19 @@ function openInvoice(cardId, dueYM) {
         <button class="icon-btn" data-nav="1" aria-label="Próxima fatura">${ICONS.right}</button>
       </div>
       <div class="detail-top">
-        <div class="detail-amount exp">${money(total)}</div>
+        <div class="detail-amount exp">${money(s.total)}</div>
         <div class="detail-sub"><span class="inv-status ${st}">${st}</span></div>
       </div>
       <div class="info-list">
         <div><span>Fecha em</span><b>${fmtDateBR(inv.close)}</b></div>
         <div><span>Vence em</span><b>${fmtDateBR(inv.due)}</b></div>
-        <div><span>Compras</span><b>${items.length}</b></div>
+        <div><span>Compras</span><b>${items.length} · ${money(s.purchases)}</b></div>
+        ${s.carry ? `<div><span>Saldo restante da fatura de ${prevName}</span><b>${money(s.carry)}</b></div>` : ''}
+        ${s.status === 'partial' ? `<div><span>Pago</span><b class="inc">${money(s.paid)}</b></div>
+          <div><span>Restante (vai para a fatura de ${nextName})</span><b class="exp">${money(s.remaining)}</b></div>` : ''}
       </div>
-      ${items.length ? `<button class="btn big ${paid ? '' : 'primary'} full" data-f="pay">${paid ? '✓ Fatura paga — desmarcar' : 'Marcar fatura como paga'}</button>` : ''}
+      ${actions}
+      ${s.status === 'partial' ? `<p class="note">O restante aparece como saldo anterior na fatura de ${nextName}. Se o banco cobrar juros, eles vêm como compra nessa fatura.</p>` : ''}
       ${items.length ? `<div class="card flush inv-items">${items.map((o) => occRow(o)).join('')}</div>` : '<p class="note center">Nenhuma compra nesta fatura.</p>'}
       <label class="btn full">📄 Importar esta fatura (OFX ou CSV)<input type="file" data-f="import" hidden></label>`;
   };
@@ -857,19 +899,49 @@ function openInvoice(cardId, dueYM) {
     <div class="sheet-head"><button class="link" data-close>Fechar</button><h2>${esc(card.emoji)} ${esc(card.name)}</h2><span></span></div>
     <div class="sheet-body" id="inv-body">${body()}</div>`, (el, close) => {
     const root = $('#inv-body', el);
+    const refresh = () => {
+      root.innerHTML = body();
+      const input = $('#pp-amount', root);
+      if (!input) return;
+      const total = invSummary(card, cur).total;
+      const rest = () => {
+        const r = total - partialValue;
+        $('#pp-rest', root).innerHTML = !partialValue ? `Total da fatura: <b>${money(total)}</b>.`
+          : r > 0 ? `Restam <b>${money(r)}</b>, que vão para a fatura de ${monthName(shift(cur, 1))}.`
+            : 'Esse valor quita a fatura inteira.';
+      };
+      rest();
+      input.addEventListener('input', () => { partialValue = centsFromDigits(input.value); input.value = digitsDisplay(partialValue); rest(); });
+      input.addEventListener('focus', () => input.select());
+      input.focus();
+    };
     el.addEventListener('change', (e) => {
       const f = e.target.closest('[data-f=import]');
       if (f && f.files[0]) { close(); openStatementImport(f.files[0], card.id, cur); }
     });
     el.addEventListener('click', (e) => {
       const nav = e.target.closest('[data-nav]');
-      if (nav) { cur = shift(cur, +nav.dataset.nav); root.innerHTML = body(); return; }
-      const pay = e.target.closest('[data-f=pay]');
-      if (pay) {
-        const was = store.invoicePaid(invoiceId(card.id, cur));
-        store.setInvoicePaid(invoiceId(card.id, cur), !was);
-        toast(was ? 'Fatura marcada como pendente' : 'Fatura paga ✓');
-        root.innerHTML = body();
+      if (nav) { cur = shift(cur, +nav.dataset.nav); partialOpen = false; refresh(); return; }
+      const f = e.target.closest('button[data-f]');
+      const id = invoiceId(card.id, cur);
+      const act = f && f.dataset.f;
+      if (act === 'pay') { store.setInvoicePaid(id, true); toast('Fatura paga ✓'); refresh(); return; }
+      if (act === 'unpay') { store.setInvoicePaid(id, false); toast('Fatura marcada como pendente'); refresh(); return; }
+      if (act === 'partial') {
+        const s = invSummary(card, cur);
+        partialOpen = true;
+        partialValue = s.status === 'partial' ? s.paid : 0;
+        refresh();
+        return;
+      }
+      if (act === 'partial-cancel') { partialOpen = false; refresh(); return; }
+      if (act === 'partial-save') {
+        const total = invSummary(card, cur).total;
+        if (!partialValue) { toast('Informe quanto você pagou', 'err'); return; }
+        partialOpen = false;
+        if (partialValue >= total) { store.setInvoicePaid(id, true); toast('Fatura paga ✓'); }
+        else { store.setInvoicePartial(id, partialValue); toast(`Pago ${money(partialValue)} · ${money(total - partialValue)} vão para a próxima fatura`); }
+        refresh();
         return;
       }
       const row = e.target.closest('[data-action=open-occ]');
@@ -1672,6 +1744,7 @@ document.addEventListener('click', async (e) => {
       e.stopPropagation();
       const o = occIndex.get(el.dataset.key);
       if (o && o.isInvoice) {
+        if (o.partial) { openInvoice(o.cardId, o.inv.dueYM); break; } // paga em parte: ajusta na fatura
         if (navigator.vibrate) navigator.vibrate(8);
         store.setInvoicePaid(invoiceId(o.cardId, o.inv.dueYM), !o.paid);
         break;

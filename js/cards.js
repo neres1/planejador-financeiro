@@ -74,20 +74,60 @@ export function invoiceItems(card, entries, dueYM) {
   return cardOccurrences(card, entries, addDays(inv.close, -40), inv.close).filter((o) => o.inv.dueYM === dueYM);
 }
 
+export const shiftYM = (ym, k) => { const [y, m] = ym.split('-').map(Number); const n = addMonths(y, m, k); return ymOf(n.y, n.m); };
+
+// Pagamento de uma fatura. `payOf(dueYM)` devolve o registro { paid, paidAmount? } (ou um booleano):
+// sem `paidAmount` = paga inteira; com `paidAmount` menor que o total = paga só uma parte, e o que
+// faltou vai para a fatura seguinte como saldo anterior (como no banco).
+function payState(rec, total) {
+  if (rec === true) rec = { paid: true };
+  if (!rec || !rec.paid) return { kind: 'none', paid: 0 };
+  if (rec.paidAmount == null || rec.paidAmount >= total) return { kind: 'full', paid: total };
+  return { kind: 'partial', paid: Math.max(0, rec.paidAmount) };
+}
+const isPartial = (rec) => !!(rec && rec !== true && rec.paid && rec.paidAmount != null);
+
+// Fatura com saldo: { items, purchases, carry (saldo da anterior), total, paid, remaining, status }
+// status: 'none' (em aberto), 'full' (paga) ou 'partial' (paga em parte; `remaining` vai para a próxima).
+export function invoiceSummary(card, entries, dueYM, payOf) {
+  let cur = dueYM;
+  for (let k = 0; k < 36 && isPartial(payOf(shiftYM(cur, -1))); k++) cur = shiftYM(cur, -1);
+  let carry = 0;
+  for (;;) {
+    const items = invoiceItems(card, entries, cur);
+    const purchases = items.reduce((a, o) => a + o.amount, 0);
+    const total = carry + purchases;
+    const st = payState(payOf(cur), total);
+    if (cur === dueYM) return { dueYM, items, purchases, carry, total, paid: st.paid, remaining: total - st.paid, status: st.kind };
+    carry = total - st.paid;
+    cur = shiftYM(cur, 1);
+  }
+}
+
 // Limite ocupado hoje: compras já feitas cujas faturas ainda não foram pagas. Compra parcelada
 // ocupa o valor total desde o dia da compra; cada fatura paga devolve a parcela dela.
-// Recorrência comum (ex.: assinatura) só ocupa as cobranças que já aconteceram.
-export function cardUsed(card, entries, isPaid, today) {
-  let used = 0;
+// Recorrência comum (ex.: assinatura) só ocupa as cobranças que já aconteceram. Fatura paga em
+// parte devolve só o valor pago; o restante segue ocupando o limite na fatura seguinte.
+export function cardUsed(card, entries, payOf, today) {
+  const byDue = new Map();
   for (const e of entries) {
     if (!isCredit(e) || e.cardId !== card.id || e.date > today) continue;
     const to = e.installments > 1 ? addDays(e.date, 31 * (e.installments + 1)) : today;
     for (const o of expand(e, e.date, to)) {
       if (!(e.installments > 1) && o.date > today) continue;
-      if (!isPaid(invoiceFor(card, o.date).dueYM)) used += o.amount;
+      const due = invoiceFor(card, o.date).dueYM;
+      byDue.set(due, (byDue.get(due) || 0) + o.amount);
     }
   }
-  return used;
+  if (!byDue.size) return 0;
+  const dues = [...byDue.keys()].sort();
+  let used = 0, carry = 0;
+  for (let cur = dues[0]; cur <= dues[dues.length - 1]; cur = shiftYM(cur, 1)) {
+    const total = carry + (byDue.get(cur) || 0);
+    const st = payState(payOf(cur), total);
+    if (st.kind === 'none') { used += total; carry = 0; } else carry = total - st.paid;
+  }
+  return used + carry;
 }
 
 // Valor da fatura em aberto de um cartão na data `date` (a fatura em que uma compra feita

@@ -520,3 +520,11 @@ label.more { cursor: pointer; }
 .imp-cat { display: block; max-width: 100%; margin-top: 6px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card-2); }
 .imp-row.is-paid .imp-cat { opacity: .55; }
 .imp-flip { display: block; margin: 14px auto 4px; font-size: 13px; font-weight: 500; }
+
+/* Pagamento parcial da fatura */
+.inv-status.parcial { background: color-mix(in srgb, var(--brand) 16%, transparent); color: var(--brand-ink); }
+.partial-box { background: var(--card); border-radius: 14px; padding: 14px 16px; margin-top: 10px; }
+.partial-box .btn-row .btn { flex: 1; }
+.info-list b.inc { color: var(--inc); }
+.info-list b.exp { color: var(--exp); }
+.partial-box .field { border-top: 0; padding: 0; }

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   invoiceOf, invoiceFor, invoiceForMonth, invoiceItems, cardUsed, splitInstallments,
-  installmentRecurrence, normalizeInstallments, paymentOf, openInvoiceTotal, triggeredAlerts,
+  installmentRecurrence, normalizeInstallments, paymentOf, openInvoiceTotal, triggeredAlerts, invoiceSummary,
 } from '../js/cards.js';
 import { createEntry, applyAll, isStructuralChange } from '../js/series.js';
 import { merge, emptyDoc, kindOf } from '../js/store.js';
@@ -75,6 +75,52 @@ test('recorrente no crédito ocupa só as cobranças que já aconteceram', () =>
   const netflix = buy('n', '2026-01-10', 5590, { recurrence: { freq: 'monthly', interval: 1, byMonthDay: 10, end: { type: 'never' } } });
   const paid = new Set(['2026-02', '2026-03']); // jan (vence 03/02) e fev (vence 03/03) pagas
   assert.equal(cardUsed(card(), [netflix], (d) => paid.has(d), '2026-03-15'), 5590);
+});
+
+const pick = ({ purchases, carry, total, paid, remaining, status }) => ({ purchases, carry, total, paid, remaining, status });
+
+test('fatura paga em parte: o restante vai para a fatura seguinte', () => {
+  const c = card();
+  const entries = [buy('a', '2026-03-10', 100000), buy('b', '2026-04-10', 30000), buy('c', '2026-05-10', 5000)];
+  const pays = new Map();
+  const payOf = (d) => pays.get(d) || null;
+  const sum = (d) => invoiceSummary(c, entries, d, payOf);
+
+  assert.deepEqual(pick(sum('2026-04')), { purchases: 100000, carry: 0, total: 100000, paid: 0, remaining: 100000, status: 'none' });
+
+  pays.set('2026-04', { paid: true, paidAmount: 40000 });
+  assert.deepEqual(pick(sum('2026-04')), { purchases: 100000, carry: 0, total: 100000, paid: 40000, remaining: 60000, status: 'partial' });
+  assert.deepEqual(pick(sum('2026-05')), { purchases: 30000, carry: 60000, total: 90000, paid: 0, remaining: 90000, status: 'none' });
+
+  // limite: o pago volta, o restante e as compras novas seguem ocupando
+  assert.equal(cardUsed(c, entries, payOf, '2026-04-20'), 60000 + 30000);
+
+  // pagar parte de novo: o saldo continua rolando
+  pays.set('2026-05', { paid: true, paidAmount: 50000 });
+  assert.equal(sum('2026-06').carry, 40000);
+  assert.equal(sum('2026-06').total, 45000);
+  assert.equal(cardUsed(c, entries, payOf, '2026-05-20'), 45000);
+
+  // pagar a fatura seguinte inteira quita também o saldo trazido
+  pays.set('2026-06', { paid: true });
+  assert.equal(sum('2026-06').status, 'full');
+  assert.equal(sum('2026-07').carry, 0);
+  assert.equal(cardUsed(c, entries, payOf, '2026-06-20'), 0);
+
+  // valor "parcial" maior ou igual ao total conta como fatura paga inteira
+  pays.set('2026-04', { paid: true, paidAmount: 100000 });
+  assert.equal(sum('2026-04').status, 'full');
+  assert.equal(sum('2026-05').carry, 0);
+});
+
+test('saldo anterior aparece mesmo sem compras novas', () => {
+  const c = card();
+  const entries = [buy('a', '2026-03-10', 20000)];
+  const payOf = (d) => (d === '2026-04' ? { paid: true, paidAmount: 5000 } : null);
+  const s = invoiceSummary(c, entries, '2026-05', payOf);
+  assert.equal(s.items.length, 0);
+  assert.equal(s.carry, 15000);
+  assert.equal(s.total, 15000);
 });
 
 test('editar compra parcelada recalcula as parcelas', () => {
