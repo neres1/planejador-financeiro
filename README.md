@@ -17,6 +17,7 @@ Organizador financeiro **pessoal** inspirado no Splitwise: em vez de dividir con
   - Cada despesa tem forma de pagamento: **Débito, Pix, Dinheiro ou Crédito** (escolhendo o cartão). O último usado já vem marcado; despesas antigas contam como débito.
   - A compra no crédito conta como gasto do **mês em que a fatura dela fecha** (ex.: vence 03/04 e fecha 27/03 → compras até 27/03 contam em março; depois, em abril).
   - Cada cartão tem uma **fatura por mês**, que entra no saldo previsto no **vencimento**; marcar a fatura como paga devolve o valor ao limite.
+  - **Pagar só uma parte**: na fatura, informe quanto pagou. Entra no caixa só o valor pago; o restante vai para a fatura seguinte como **saldo anterior** e continua ocupando o limite até ser pago. Dá para alterar o valor, pagar o restante ou desfazer.
   - **Parcelado em N×**: o limite desconta o total na compra e cada parcela cai numa fatura. Recorrências no crédito (assinaturas) caem cada uma no seu ciclo.
   - No Resumo: limite disponível e fatura do mês de cada cartão. Cartão com compras é arquivado em vez de excluído.
 - **Alertas de gastos** (Ajustes → Alertas de gastos): um valor, uma mensagem sua e o cartão (ou todos somados). Ao escolher **Crédito** num lançamento, se a fatura em aberto já atingiu o valor, a mensagem aparece no formulário — só como lembrete, sem impedir o lançamento.
